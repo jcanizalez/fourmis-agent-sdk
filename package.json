@@ -1,6 +1,6 @@
 {
   "name": "fourmis-agents-sdk",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Multi-provider AI agent SDK with direct API access and in-process tool execution",
   "type": "module",
   "main": "dist/index.js",
@@ -54,6 +54,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@google/genai": "^1.40.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "openai": "^6.21.0",
     "zod": "^3.24.0"

@@ -5,6 +5,7 @@
 import type { ProviderAdapter } from "./types.ts";
 import { AnthropicAdapter } from "./anthropic.ts";
 import { OpenAIAdapter } from "./openai.ts";
+import { GeminiAdapter } from "./gemini.ts";
 
 const providers = new Map<string, ProviderAdapter>();
 
@@ -30,6 +31,14 @@ export function getProvider(name: string, options?: { apiKey?: string; baseUrl?:
 
   if (name === "openai") {
     const adapter = new OpenAIAdapter(options);
+    if (!options?.apiKey && !options?.baseUrl) {
+      providers.set(name, adapter);
+    }
+    return adapter;
+  }
+
+  if (name === "gemini") {
+    const adapter = new GeminiAdapter(options);
     if (!options?.apiKey && !options?.baseUrl) {
       providers.set(name, adapter);
     }

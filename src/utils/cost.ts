@@ -195,3 +195,81 @@ export function findOpenAIPricing(model: string): ModelPricing | undefined {
 
   return bestPricing;
 }
+
+// ─── Gemini ───────────────────────────────────────────────────────────────────
+
+export const GEMINI_PRICING: Record<string, ModelPricing> = {
+  "gemini-2.5-pro": {
+    inputPerMillion: 1.25,
+    outputPerMillion: 10.00,
+    cacheReadPerMillion: 0.315,
+  },
+  "gemini-2.5-flash": {
+    inputPerMillion: 0.15,
+    outputPerMillion: 0.60,
+    cacheReadPerMillion: 0.0375,
+  },
+  "gemini-2.5-flash-lite": {
+    inputPerMillion: 0.075,
+    outputPerMillion: 0.30,
+  },
+  "gemini-2.0-flash": {
+    inputPerMillion: 0.10,
+    outputPerMillion: 0.40,
+    cacheReadPerMillion: 0.025,
+  },
+  "gemini-2.0-flash-lite": {
+    inputPerMillion: 0.075,
+    outputPerMillion: 0.30,
+  },
+};
+
+export const GEMINI_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-2.5-pro": 1_048_576,
+  "gemini-2.5-flash": 1_048_576,
+  "gemini-2.5-flash-lite": 1_048_576,
+  "gemini-2.0-flash": 1_048_576,
+  "gemini-2.0-flash-lite": 1_048_576,
+};
+
+export const GEMINI_MAX_OUTPUT: Record<string, number> = {
+  "gemini-2.5-pro": 65_536,
+  "gemini-2.5-flash": 65_536,
+  "gemini-2.5-flash-lite": 65_536,
+  "gemini-2.0-flash": 8_192,
+  "gemini-2.0-flash-lite": 8_192,
+};
+
+/**
+ * Calculate cost for a Gemini model and token usage.
+ */
+export function calculateGeminiCost(
+  model: string,
+  usage: { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number },
+): number {
+  const pricing = findGeminiPricing(model);
+  if (!pricing) return 0;
+
+  const inputCost = (usage.inputTokens / 1_000_000) * pricing.inputPerMillion;
+  const outputCost = (usage.outputTokens / 1_000_000) * pricing.outputPerMillion;
+  const cacheReadCost = (usage.cacheReadInputTokens / 1_000_000) * (pricing.cacheReadPerMillion ?? pricing.inputPerMillion);
+
+  return inputCost + outputCost + cacheReadCost;
+}
+
+export function findGeminiPricing(model: string): ModelPricing | undefined {
+  // Exact match
+  if (GEMINI_PRICING[model]) return GEMINI_PRICING[model];
+
+  // Prefix match (e.g., "gemini-2.5-flash-preview-05-20" → "gemini-2.5-flash")
+  let bestKey = "";
+  let bestPricing: ModelPricing | undefined;
+  for (const [key, pricing] of Object.entries(GEMINI_PRICING)) {
+    if (model.startsWith(key) && key.length > bestKey.length) {
+      bestKey = key;
+      bestPricing = pricing;
+    }
+  }
+
+  return bestPricing;
+}
