@@ -43,11 +43,20 @@ export class McpClientManager {
         await client.connect(clientTransport);
       } else if (config.type === "sse") {
         const { SSEClientTransport } = await import("@modelcontextprotocol/sdk/client/sse.js");
-        const transport = new SSEClientTransport(new URL(config.url));
+        const opts = config.headers
+          ? {
+              eventSourceInit: { headers: config.headers } as any,
+              requestInit: { headers: config.headers },
+            }
+          : undefined;
+        const transport = new SSEClientTransport(new URL(config.url), opts);
         await client.connect(transport);
       } else if (config.type === "http") {
         const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-        const transport = new StreamableHTTPClientTransport(new URL(config.url));
+        const requestInit = config.headers
+          ? { headers: config.headers }
+          : undefined;
+        const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit });
         await client.connect(transport);
       } else {
         // stdio (default)

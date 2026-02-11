@@ -68,7 +68,7 @@ export function query(params: {
   const toolNames = resolveToolNames(options.tools);
   const registry = buildToolRegistry(
     toolNames,
-    options.allowedTools,
+    undefined, // allowedTools is for permissions, not filtering
     options.disallowedTools,
   );
 
@@ -102,6 +102,15 @@ export function query(params: {
       if (mergedAllow.length > 0) mergedPermissions.allow = mergedAllow;
       if (mergedDeny.length > 0) mergedPermissions.deny = mergedDeny;
     }
+  }
+
+  // Merge allowedTools into permission allow rules (pre-approved tools)
+  if (options.allowedTools && options.allowedTools.length > 0) {
+    if (!mergedPermissions) mergedPermissions = {} as PermissionsConfig;
+    mergedPermissions.allow = [
+      ...(mergedPermissions.allow ?? []),
+      ...options.allowedTools,
+    ];
   }
 
   // Permission manager

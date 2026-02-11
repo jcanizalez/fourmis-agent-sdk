@@ -1,6 +1,6 @@
 {
   "name": "fourmis-agents-sdk",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Multi-provider AI agent SDK with direct API access and in-process tool execution",
   "type": "module",
   "main": "dist/index.js",

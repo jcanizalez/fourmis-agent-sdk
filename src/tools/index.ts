@@ -41,8 +41,6 @@ export function buildToolRegistry(
   const registry = new ToolRegistry();
 
   for (const name of toolNames) {
-    // Check allowed/disallowed lists
-    if (allowedTools && !allowedTools.includes(name)) continue;
     if (disallowedTools?.includes(name)) continue;
 
     const tool = ALL_TOOLS[name];
