@@ -539,9 +539,10 @@ type StoredTokens = {
 };
 
 function loadTokensSync(): StoredTokens | null {
+  const home = process.env.HOME ?? require("node:os").homedir();
   const paths = [
-    `${process.env.HOME}/.fourmis/openai-auth.json`,
-    `${process.env.HOME}/.codex/auth.json`,
+    `${home}/.fourmis/openai-auth.json`,
+    `${home}/.codex/auth.json`,
   ];
 
   for (const p of paths) {

@@ -11,6 +11,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -30,8 +31,12 @@ export type StoredTokens = {
   account_id: string;
 };
 
+function getHome(): string {
+  return process.env.HOME ?? homedir();
+}
+
 function tokenDir(): string {
-  return join(process.env.HOME ?? "/root", ".fourmis");
+  return join(getHome(), ".fourmis");
 }
 
 function tokenPath(): string {
@@ -39,7 +44,7 @@ function tokenPath(): string {
 }
 
 function codexFallbackPath(): string {
-  return join(process.env.HOME ?? "/root", ".codex", "auth.json");
+  return join(getHome(), ".codex", "auth.json");
 }
 
 export function loadTokens(): StoredTokens | null {
