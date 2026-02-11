@@ -1,14 +1,53 @@
 {
-  "name": "fourmis-agents",
+  "name": "fourmis-agents-sdk",
   "version": "0.1.0",
   "description": "Multi-provider AI agent SDK with direct API access and in-process tool execution",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "license": "MIT",
+  "author": "jcanizalez",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jcanizalez/fourmis-agent-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jcanizalez/fourmis-agent-sdk/issues"
+  },
+  "homepage": "https://github.com/jcanizalez/fourmis-agent-sdk#readme",
+  "keywords": [
+    "ai",
+    "agent",
+    "sdk",
+    "llm",
+    "anthropic",
+    "openai",
+    "mcp",
+    "bun",
+    "multi-provider"
+  ],
+  "engines": {
+    "bun": ">=1.0.0"
   },
   "scripts": {
+    "build": "bun run build:js && bun run build:types",
+    "build:js": "bun scripts/build.ts",
+    "build:types": "tsc --project tsconfig.build.json && bun scripts/fix-dts-extensions.ts",
+    "clean": "rm -rf dist",
+    "prebuild": "bun run clean",
+    "prepublishOnly": "bun run build",
+    "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:tools": "bun test tests/tools/",
     "test:integration": "bun test tests/integration.test.ts"
@@ -21,6 +60,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.38",
-    "bun-types": "latest"
+    "bun-types": "latest",
+    "typescript": "^5.9.3"
   }
 }
