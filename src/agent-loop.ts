@@ -22,6 +22,12 @@ import type { PermissionManager } from "./permissions.ts";
 import type { HookManager } from "./hooks.ts";
 import type { McpClientManager } from "./mcp/client.ts";
 
+export type SessionLogger = (
+  role: "user" | "assistant",
+  content: NormalizedContent[] | string,
+  parentUuid: string | null,
+) => string;
+
 export type AgentLoopOptions = {
   provider: ProviderAdapter;
   model: string;
@@ -38,6 +44,8 @@ export type AgentLoopOptions = {
   debug?: boolean;
   hooks?: HookManager;
   mcpClient?: McpClientManager;
+  previousMessages?: NormalizedMessage[];
+  sessionLogger?: SessionLogger;
 };
 
 export async function* agentLoop(
@@ -60,6 +68,8 @@ export async function* agentLoop(
     debug,
     hooks,
     mcpClient,
+    previousMessages,
+    sessionLogger,
   } = options;
 
   const startTime = Date.now();
@@ -81,10 +91,16 @@ export async function* agentLoop(
     tools.register(createReadMcpResourceTool(mcpClient));
   }
 
-  // Initialize conversation with user prompt
+  // Initialize conversation: previous messages (from session) + new user prompt
   const messages: NormalizedMessage[] = [
+    ...(previousMessages ?? []),
     { role: "user", content: prompt },
   ];
+
+  // Log the user prompt to session file
+  if (sessionLogger) {
+    sessionLogger("user", prompt, null);
+  }
 
   // Yield init event
   yield {
@@ -212,6 +228,11 @@ export async function* agentLoop(
       });
     }
     messages.push({ role: "assistant", content: assistantContent });
+
+    // Log assistant message to session
+    if (sessionLogger) {
+      sessionLogger("assistant", assistantContent, null);
+    }
 
     // Yield text message if there's text
     if (assistantText) {
@@ -406,6 +427,11 @@ export async function* agentLoop(
 
     // Add tool results as user message
     messages.push({ role: "user", content: toolResults });
+
+    // Log tool results to session
+    if (sessionLogger) {
+      sessionLogger("user", toolResults, null);
+    }
   }
 }
 

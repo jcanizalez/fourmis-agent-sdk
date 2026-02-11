@@ -2,6 +2,9 @@
  * System prompt builder — assembles the system prompt that makes the agent effective.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 const CORE_IDENTITY = `You are an AI coding agent. You help users with software engineering tasks by reading, writing, and modifying code. You have access to tools that let you interact with the filesystem and execute commands.
 
 You are highly capable and can help users complete complex tasks that would otherwise be too difficult or time-consuming.`;
@@ -83,6 +86,12 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
   // Working directory context
   if (context.cwd) {
     sections.push(`# Environment\n\nWorking directory: ${context.cwd}`);
+
+    // Auto-load CLAUDE.md or AGENTS.md from working directory
+    const instructions = readProjectInstructions(context.cwd);
+    if (instructions) {
+      sections.push(`# Project Instructions\n\n${instructions}`);
+    }
   }
 
   // Custom prompt (appended at the end)
@@ -91,4 +100,16 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
   }
 
   return sections.join("\n\n");
+}
+
+function readProjectInstructions(cwd: string): string | null {
+  for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+    try {
+      const content = readFileSync(join(cwd, name), "utf-8").trim();
+      if (content) return content;
+    } catch {
+      // File doesn't exist or not readable — skip
+    }
+  }
+  return null;
 }

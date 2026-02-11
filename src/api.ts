@@ -15,6 +15,8 @@ import { HookManager } from "./hooks.ts";
 import { McpClientManager } from "./mcp/client.ts";
 import { createTaskTool, createTaskOutputTool, createTaskStopTool } from "./agents/tools.ts";
 import { TaskManager } from "./agents/task-manager.ts";
+import { findLatestSession, loadSessionMessages, createSessionLogger } from "./utils/session-store.ts";
+import type { NormalizedMessage } from "./providers/types.ts";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TURNS = 10;
@@ -74,6 +76,7 @@ export function query(params: {
   const systemPrompt = options.systemPrompt ?? buildSystemPrompt({
     tools: registry.list(),
     cwd: options.cwd,
+    customPrompt: options.appendSystemPrompt,
   });
 
   // Settings manager (file-based permissions)
@@ -112,8 +115,35 @@ export function query(params: {
   // Working directory
   const cwd = options.cwd ?? process.cwd();
 
-  // Session
-  const sessionId = uuid();
+  // Session — resolve ID and load previous messages
+  let sessionId = options.sessionId ?? uuid();
+  let previousMessages: NormalizedMessage[] | undefined;
+
+  if (options.continue) {
+    // Continue most recent session in this cwd
+    const latestId = findLatestSession(cwd);
+    if (latestId) {
+      previousMessages = loadSessionMessages(cwd, latestId);
+      if (options.forkSession) {
+        // Fork: keep old messages as context but use a new session ID
+        sessionId = uuid();
+      } else {
+        sessionId = latestId;
+      }
+    }
+  } else if (options.resume) {
+    // Resume a specific session by ID
+    previousMessages = loadSessionMessages(cwd, options.resume);
+    if (options.forkSession) {
+      sessionId = uuid();
+    } else {
+      sessionId = options.resume;
+    }
+  }
+
+  // Session logger — persists messages to JSONL
+  const persistSession = options.persistSession !== false;
+  const sessionLogger = persistSession ? createSessionLogger(cwd, sessionId, model) : undefined;
 
   // Abort controller
   const abortController = new AbortController();
@@ -165,6 +195,8 @@ export function query(params: {
     debug: options.debug,
     hooks: hookManager,
     mcpClient,
+    previousMessages,
+    sessionLogger,
   });
 
   return createQuery(generator, abortController);

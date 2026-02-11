@@ -233,7 +233,8 @@ export type QueryOptions = {
   // Core
   model?: string;
   cwd?: string;
-  systemPrompt?: string;
+  systemPrompt?: string;         // replaces default system prompt entirely
+  appendSystemPrompt?: string;   // appended to the auto-built system prompt
   maxTurns?: number;
   maxBudgetUsd?: number;
   maxThinkingTokens?: number;
@@ -248,6 +249,13 @@ export type QueryOptions = {
   canUseTool?: CanUseTool;
   permissions?: PermissionsConfig;
   settingSources?: SettingSource[];
+
+  // Session persistence
+  persistSession?: boolean;     // default true — save to ~/.claude/projects/
+  continue?: boolean;           // continue most recent session in cwd
+  resume?: string;              // resume specific session by ID
+  forkSession?: boolean;        // fork when resuming (new session, old messages as context)
+  sessionId?: string;           // custom session ID
 
   // Streaming
   includeStreamEvents?: boolean;
