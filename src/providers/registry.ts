@@ -4,6 +4,7 @@
 
 import type { ProviderAdapter } from "./types.ts";
 import { AnthropicAdapter } from "./anthropic.ts";
+import { OpenAIAdapter } from "./openai.ts";
 
 const providers = new Map<string, ProviderAdapter>();
 
@@ -21,6 +22,14 @@ export function getProvider(name: string, options?: { apiKey?: string; baseUrl?:
   // Lazy-create built-in providers
   if (name === "anthropic") {
     const adapter = new AnthropicAdapter(options);
+    if (!options?.apiKey && !options?.baseUrl) {
+      providers.set(name, adapter);
+    }
+    return adapter;
+  }
+
+  if (name === "openai") {
+    const adapter = new OpenAIAdapter(options);
     if (!options?.apiKey && !options?.baseUrl) {
       providers.set(name, adapter);
     }

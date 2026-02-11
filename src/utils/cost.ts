@@ -93,3 +93,105 @@ function findPricing(model: string): ModelPricing | undefined {
 
   return undefined;
 }
+
+// ─── OpenAI ──────────────────────────────────────────────────────────────────
+
+export const OPENAI_PRICING: Record<string, ModelPricing> = {
+  "gpt-4.1": {
+    inputPerMillion: 2,
+    outputPerMillion: 8,
+    cacheReadPerMillion: 0.5,
+  },
+  "gpt-4.1-mini": {
+    inputPerMillion: 0.4,
+    outputPerMillion: 1.6,
+    cacheReadPerMillion: 0.1,
+  },
+  "gpt-4.1-nano": {
+    inputPerMillion: 0.1,
+    outputPerMillion: 0.4,
+    cacheReadPerMillion: 0.025,
+  },
+  "gpt-4o": {
+    inputPerMillion: 2.5,
+    outputPerMillion: 10,
+    cacheReadPerMillion: 1.25,
+  },
+  "gpt-4o-mini": {
+    inputPerMillion: 0.15,
+    outputPerMillion: 0.6,
+    cacheReadPerMillion: 0.075,
+  },
+  "o3": {
+    inputPerMillion: 2,
+    outputPerMillion: 8,
+    cacheReadPerMillion: 0.5,
+  },
+  "o3-mini": {
+    inputPerMillion: 1.1,
+    outputPerMillion: 4.4,
+    cacheReadPerMillion: 0.275,
+  },
+  "o4-mini": {
+    inputPerMillion: 1.1,
+    outputPerMillion: 4.4,
+    cacheReadPerMillion: 0.275,
+  },
+};
+
+export const OPENAI_CONTEXT_WINDOWS: Record<string, number> = {
+  "gpt-4.1": 1_047_576,
+  "gpt-4.1-mini": 1_047_576,
+  "gpt-4.1-nano": 1_047_576,
+  "gpt-4o": 128_000,
+  "gpt-4o-mini": 128_000,
+  "o3": 200_000,
+  "o3-mini": 200_000,
+  "o4-mini": 200_000,
+};
+
+export const OPENAI_MAX_OUTPUT: Record<string, number> = {
+  "gpt-4.1": 32_768,
+  "gpt-4.1-mini": 32_768,
+  "gpt-4.1-nano": 32_768,
+  "gpt-4o": 16_384,
+  "gpt-4o-mini": 16_384,
+  "o3": 100_000,
+  "o3-mini": 100_000,
+  "o4-mini": 100_000,
+};
+
+/**
+ * Calculate cost for an OpenAI model and token usage.
+ */
+export function calculateOpenAICost(
+  model: string,
+  usage: { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number },
+): number {
+  const pricing = findOpenAIPricing(model);
+  if (!pricing) return 0;
+
+  const inputCost = (usage.inputTokens / 1_000_000) * pricing.inputPerMillion;
+  const outputCost = (usage.outputTokens / 1_000_000) * pricing.outputPerMillion;
+  const cacheReadCost = (usage.cacheReadInputTokens / 1_000_000) * (pricing.cacheReadPerMillion ?? pricing.inputPerMillion);
+
+  return inputCost + outputCost + cacheReadCost;
+}
+
+export function findOpenAIPricing(model: string): ModelPricing | undefined {
+  // Exact match
+  if (OPENAI_PRICING[model]) return OPENAI_PRICING[model];
+
+  // Prefix match for dated variants (e.g., "gpt-4.1-mini-2025-04-14" → "gpt-4.1-mini")
+  // Sort by key length descending so "gpt-4.1-mini" matches before "gpt-4.1"
+  let bestKey = "";
+  let bestPricing: ModelPricing | undefined;
+  for (const [key, pricing] of Object.entries(OPENAI_PRICING)) {
+    if (model.startsWith(key) && key.length > bestKey.length) {
+      bestKey = key;
+      bestPricing = pricing;
+    }
+  }
+
+  return bestPricing;
+}
