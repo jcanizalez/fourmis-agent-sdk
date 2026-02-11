@@ -61,3 +61,29 @@ export { WriteTool } from "./tools/write.ts";
 export { EditTool } from "./tools/edit.ts";
 export { GlobTool } from "./tools/glob.ts";
 export { GrepTool } from "./tools/grep.ts";
+
+// Hooks
+export { HookManager, HOOK_EVENTS } from "./hooks.ts";
+export type {
+  HookEvent,
+  HookCallback,
+  HookCallbackMatcher,
+  HookInput,
+  SyncHookJSONOutput,
+} from "./hooks.ts";
+
+// MCP
+export { McpClientManager } from "./mcp/client.ts";
+export { createMcpServer, tool as mcpTool } from "./mcp/server.ts";
+export type {
+  McpServerConfig,
+  McpStdioConfig,
+  McpSseConfig,
+  McpHttpConfig,
+  McpSdkConfig,
+  McpServerStatus,
+} from "./mcp/types.ts";
+
+// Subagents
+export { TaskManager } from "./agents/task-manager.ts";
+export type { AgentDefinition, BackgroundTask } from "./agents/types.ts";

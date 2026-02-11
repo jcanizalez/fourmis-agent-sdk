@@ -252,6 +252,15 @@ export type QueryOptions = {
   // Streaming
   includeStreamEvents?: boolean;
 
+  // Hooks
+  hooks?: Partial<Record<import("./hooks.ts").HookEvent, import("./hooks.ts").HookCallbackMatcher[]>>;
+
+  // MCP
+  mcpServers?: Record<string, import("./mcp/types.ts").McpServerConfig>;
+
+  // Subagents
+  agents?: Record<string, import("./agents/types.ts").AgentDefinition>;
+
   // Debug
   debug?: boolean;
   signal?: AbortSignal;

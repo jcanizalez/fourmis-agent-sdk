@@ -19,6 +19,8 @@ import { uuid, emptyTokenUsage, mergeUsage } from "./types.ts";
 import type { ProviderAdapter, NormalizedMessage, NormalizedContent, ChatChunk } from "./providers/types.ts";
 import type { ToolRegistry, ToolContext } from "./tools/registry.ts";
 import type { PermissionManager } from "./permissions.ts";
+import type { HookManager } from "./hooks.ts";
+import type { McpClientManager } from "./mcp/client.ts";
 
 export type AgentLoopOptions = {
   provider: ProviderAdapter;
@@ -34,6 +36,8 @@ export type AgentLoopOptions = {
   signal: AbortSignal;
   env?: Record<string, string>;
   debug?: boolean;
+  hooks?: HookManager;
+  mcpClient?: McpClientManager;
 };
 
 export async function* agentLoop(
@@ -54,6 +58,8 @@ export async function* agentLoop(
     signal,
     env,
     debug,
+    hooks,
+    mcpClient,
   } = options;
 
   const startTime = Date.now();
@@ -62,6 +68,18 @@ export async function* agentLoop(
   let totalUsage = emptyTokenUsage();
   let costUsd = 0;
   const modelUsage: Record<string, ModelUsage> = {};
+
+  // Connect MCP servers and register their tools
+  if (mcpClient) {
+    await mcpClient.connectAll();
+    for (const tool of mcpClient.getTools()) {
+      tools.register(tool);
+    }
+    // Lazy import to avoid circular deps
+    const { createListMcpResourcesTool, createReadMcpResourceTool } = await import("./tools/mcp-resources.ts");
+    tools.register(createListMcpResourcesTool(mcpClient));
+    tools.register(createReadMcpResourceTool(mcpClient));
+  }
 
   // Initialize conversation with user prompt
   const messages: NormalizedMessage[] = [
@@ -78,6 +96,11 @@ export async function* agentLoop(
     cwd,
     uuid: uuid(),
   };
+
+  // Fire SessionStart hook
+  if (hooks) {
+    await hooks.fire("SessionStart", { event: "SessionStart", session_id: sessionId }, undefined, { signal });
+  }
 
   while (true) {
     // Check abort signal
@@ -197,6 +220,15 @@ export async function* agentLoop(
 
     // If no tool calls → we're done
     if (toolCalls.length === 0) {
+      // Fire Stop hook
+      if (hooks) {
+        await hooks.fire("Stop", { event: "Stop", session_id: sessionId, text: assistantText || undefined }, undefined, { signal });
+      }
+      // Fire SessionEnd hook
+      if (hooks) {
+        await hooks.fire("SessionEnd", { event: "SessionEnd", session_id: sessionId }, undefined, { signal });
+      }
+
       yield {
         type: "result",
         subtype: "success",
@@ -217,35 +249,96 @@ export async function* agentLoop(
     const toolResults: NormalizedContent[] = [];
 
     for (const call of toolCalls) {
-      // Permission check
-      const permResult = await permissions.check(
-        call.name,
-        (call.input ?? {}) as Record<string, unknown>,
-        { signal, toolUseId: call.id },
-      );
+      // Fire PreToolUse hook
+      let hookDenied = false;
+      let hookUpdatedInput: unknown | undefined;
+      if (hooks) {
+        const hookResult = await hooks.fire(
+          "PreToolUse",
+          { event: "PreToolUse", tool_name: call.name, tool_input: call.input, session_id: sessionId },
+          call.id,
+          { signal },
+        );
+        if (hookResult) {
+          if (hookResult.permissionDecision === "deny") {
+            hookDenied = true;
+          }
+          if (hookResult.updatedInput !== undefined) {
+            hookUpdatedInput = hookResult.updatedInput;
+          }
+        }
+      }
 
-      if (permResult.behavior === "deny") {
+      // If hook denied, skip to PostToolUseFailure
+      if (hookDenied) {
+        const denyContent = "Denied by hook";
         yield {
           type: "tool_result",
           id: call.id,
           name: call.name,
-          content: `Permission denied: ${permResult.message}`,
+          content: denyContent,
           isError: true,
           uuid: uuid(),
         };
         toolResults.push({
           type: "tool_result",
           tool_use_id: call.id,
-          content: `Permission denied: ${permResult.message}`,
+          content: denyContent,
           is_error: true,
         });
+        if (hooks) {
+          await hooks.fire(
+            "PostToolUseFailure",
+            { event: "PostToolUseFailure", tool_name: call.name, tool_result: denyContent, tool_error: true, session_id: sessionId },
+            call.id,
+            { signal },
+          );
+        }
         continue;
       }
 
-      // Use potentially updated input
+      // Apply hook's updated input if provided
+      const inputAfterHook = hookUpdatedInput !== undefined ? hookUpdatedInput : call.input;
+
+      // Permission check
+      const permResult = await permissions.check(
+        call.name,
+        (inputAfterHook ?? {}) as Record<string, unknown>,
+        { signal, toolUseId: call.id },
+      );
+
+      if (permResult.behavior === "deny") {
+        const denyContent = `Permission denied: ${permResult.message}`;
+        yield {
+          type: "tool_result",
+          id: call.id,
+          name: call.name,
+          content: denyContent,
+          isError: true,
+          uuid: uuid(),
+        };
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: denyContent,
+          is_error: true,
+        });
+        // Fire PostToolUseFailure for permission denial
+        if (hooks) {
+          await hooks.fire(
+            "PostToolUseFailure",
+            { event: "PostToolUseFailure", tool_name: call.name, tool_result: denyContent, tool_error: true, session_id: sessionId },
+            call.id,
+            { signal },
+          );
+        }
+        continue;
+      }
+
+      // Use potentially updated input from permissions
       const toolInput = permResult.behavior === "allow" && permResult.updatedInput
         ? permResult.updatedInput
-        : call.input;
+        : inputAfterHook;
 
       // Yield tool_use event
       yield {
@@ -268,6 +361,29 @@ export async function* agentLoop(
 
       if (debug) {
         console.error(`[debug] Tool ${call.name}: ${result.isError ? "ERROR" : "OK"} (${result.content.length} chars)`);
+      }
+
+      // Fire PostToolUse or PostToolUseFailure
+      if (hooks) {
+        if (result.isError) {
+          await hooks.fire(
+            "PostToolUseFailure",
+            { event: "PostToolUseFailure", tool_name: call.name, tool_result: result.content, tool_error: true, session_id: sessionId },
+            call.id,
+            { signal },
+          );
+        } else {
+          const postResult = await hooks.fire(
+            "PostToolUse",
+            { event: "PostToolUse", tool_name: call.name, tool_result: result.content, session_id: sessionId },
+            call.id,
+            { signal },
+          );
+          // Append additionalContext if provided
+          if (postResult?.additionalContext) {
+            result.content += `\n${postResult.additionalContext}`;
+          }
+        }
       }
 
       // Yield tool_result event

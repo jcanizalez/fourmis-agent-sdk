@@ -11,6 +11,10 @@ import { SettingsManager } from "./settings.ts";
 import { buildSystemPrompt } from "./utils/system-prompt.ts";
 import { agentLoop } from "./agent-loop.ts";
 import { createQuery } from "./query.ts";
+import { HookManager } from "./hooks.ts";
+import { McpClientManager } from "./mcp/client.ts";
+import { createTaskTool, createTaskOutputTool, createTaskStopTool } from "./agents/tools.ts";
+import { TaskManager } from "./agents/task-manager.ts";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TURNS = 10;
@@ -117,6 +121,33 @@ export function query(params: {
     options.signal.addEventListener("abort", () => abortController.abort(), { once: true });
   }
 
+  // Hooks
+  const hookManager = options.hooks ? new HookManager(options.hooks) : undefined;
+
+  // MCP
+  const mcpClient = options.mcpServers && Object.keys(options.mcpServers).length > 0
+    ? new McpClientManager(options.mcpServers)
+    : undefined;
+
+  // Subagents
+  if (options.agents && Object.keys(options.agents).length > 0) {
+    const taskManager = new TaskManager();
+    const agentCtx = {
+      agents: options.agents,
+      parentProvider: provider,
+      parentModel: model,
+      parentPermissions: permissions,
+      parentHooks: hookManager,
+      parentCwd: cwd,
+      parentEnv: options.env,
+      parentDebug: options.debug,
+      taskManager,
+    };
+    registry.register(createTaskTool(agentCtx));
+    registry.register(createTaskOutputTool(taskManager));
+    registry.register(createTaskStopTool(taskManager));
+  }
+
   // Create agent loop generator
   const generator = agentLoop(prompt, {
     provider,
@@ -132,6 +163,8 @@ export function query(params: {
     signal: abortController.signal,
     env: options.env,
     debug: options.debug,
+    hooks: hookManager,
+    mcpClient,
   });
 
   return createQuery(generator, abortController);
