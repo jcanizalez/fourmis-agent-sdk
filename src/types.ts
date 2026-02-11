@@ -50,17 +50,43 @@ export type PermissionMode =
   | "acceptEdits"
   | "bypassPermissions"
   | "plan"
+  | "delegate"
   | "dontAsk";
+
+export type PermissionBehavior = "allow" | "deny" | "ask";
+
+export type PermissionRuleValue = {
+  toolName: string;
+  ruleContent?: string;
+};
+
+export type PermissionUpdateDestination =
+  | "userSettings"
+  | "projectSettings"
+  | "localSettings"
+  | "session"
+  | "cliArg";
+
+export type PermissionUpdate =
+  | { type: "addRules"; rules: PermissionRuleValue[]; behavior: PermissionBehavior; destination: PermissionUpdateDestination }
+  | { type: "replaceRules"; rules: PermissionRuleValue[]; behavior: PermissionBehavior; destination: PermissionUpdateDestination }
+  | { type: "removeRules"; rules: PermissionRuleValue[]; behavior: PermissionBehavior; destination: PermissionUpdateDestination }
+  | { type: "setMode"; mode: PermissionMode; destination: PermissionUpdateDestination }
+  | { type: "addDirectories"; directories: string[]; destination: PermissionUpdateDestination }
+  | { type: "removeDirectories"; directories: string[]; destination: PermissionUpdateDestination };
 
 export type PermissionResult =
   | {
       behavior: "allow";
       updatedInput?: Record<string, unknown>;
+      updatedPermissions?: PermissionUpdate[];
+      toolUseId?: string;
     }
   | {
       behavior: "deny";
       message: string;
       interrupt?: boolean;
+      toolUseId?: string;
     };
 
 export type CanUseTool = (
@@ -68,6 +94,9 @@ export type CanUseTool = (
   input: Record<string, unknown>,
   options: {
     signal: AbortSignal;
+    suggestions?: PermissionUpdate[];
+    blockedPath?: string;
+    decisionReason?: string;
     toolUseId: string;
     agentId?: string;
   },
@@ -156,6 +185,43 @@ export type AgentMessage =
   | ErrorMessage
   | StatusMessage;
 
+// ─── Permissions Config ─────────────────────────────────────────────────────
+
+/**
+ * Tool permission rules — same shape as Claude Code's settings.local.json.
+ *
+ * Accepts both simple tool names and rule objects with content patterns.
+ *
+ * @example
+ * ```ts
+ * // Simple: allow/deny by tool name
+ * permissions: {
+ *   allow: ["Read", "Glob", "Grep", "Write", "Edit"],
+ *   deny: ["Bash"],
+ * }
+ *
+ * // Advanced: allow specific patterns
+ * permissions: {
+ *   allow: [
+ *     "Read",
+ *     { toolName: "Bash", ruleContent: "npm test" },
+ *     { toolName: "Bash", ruleContent: "ls *" },
+ *   ],
+ *   deny: ["WebFetch"],
+ * }
+ * ```
+ */
+export type PermissionsConfig = {
+  /** Tool names or rules that are auto-approved (no prompting). */
+  allow?: (string | PermissionRuleValue)[];
+  /** Tool names or rules that are always denied. */
+  deny?: (string | PermissionRuleValue)[];
+};
+
+// ─── Setting Source ─────────────────────────────────────────────────────────
+
+export type SettingSource = "user" | "project" | "local";
+
 // ─── Query Options ──────────────────────────────────────────────────────────
 
 export type QueryOptions = {
@@ -180,6 +246,8 @@ export type QueryOptions = {
   // Permissions
   permissionMode?: PermissionMode;
   canUseTool?: CanUseTool;
+  permissions?: PermissionsConfig;
+  settingSources?: SettingSource[];
 
   // Streaming
   includeStreamEvents?: boolean;

@@ -2,11 +2,12 @@
  * Public query() function — the main entry point.
  */
 
-import type { QueryOptions, Query } from "./types.ts";
+import type { QueryOptions, Query, PermissionsConfig } from "./types.ts";
 import { uuid } from "./types.ts";
 import { getProvider } from "./providers/registry.ts";
 import { resolveToolNames, buildToolRegistry } from "./tools/index.ts";
 import { PermissionManager } from "./permissions.ts";
+import { SettingsManager } from "./settings.ts";
 import { buildSystemPrompt } from "./utils/system-prompt.ts";
 import { agentLoop } from "./agent-loop.ts";
 import { createQuery } from "./query.ts";
@@ -71,10 +72,37 @@ export function query(params: {
     cwd: options.cwd,
   });
 
+  // Settings manager (file-based permissions)
+  let settingsManager: SettingsManager | undefined;
+  let mergedPermissions = options.permissions;
+
+  if (options.settingSources && options.settingSources.length > 0) {
+    const cwd = options.cwd ?? process.cwd();
+    settingsManager = new SettingsManager(cwd);
+    const filePermissions = settingsManager.loadPermissions(options.settingSources);
+
+    // Merge: file permissions as base, explicit options override
+    if (filePermissions.allow || filePermissions.deny || mergedPermissions) {
+      const mergedAllow = [
+        ...(filePermissions.allow ?? []),
+        ...(mergedPermissions?.allow ?? []),
+      ];
+      const mergedDeny = [
+        ...(filePermissions.deny ?? []),
+        ...(mergedPermissions?.deny ?? []),
+      ];
+      mergedPermissions = {} as PermissionsConfig;
+      if (mergedAllow.length > 0) mergedPermissions.allow = mergedAllow;
+      if (mergedDeny.length > 0) mergedPermissions.deny = mergedDeny;
+    }
+  }
+
   // Permission manager
   const permissions = new PermissionManager(
     options.permissionMode ?? "default",
     options.canUseTool,
+    mergedPermissions,
+    settingsManager,
   );
 
   // Working directory

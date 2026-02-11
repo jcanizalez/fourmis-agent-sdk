@@ -22,9 +22,18 @@ export type {
   TokenUsage,
   ModelUsage,
   PermissionMode,
+  PermissionBehavior,
   PermissionResult,
+  PermissionRuleValue,
+  PermissionUpdate,
+  PermissionUpdateDestination,
+  PermissionsConfig,
   CanUseTool,
+  SettingSource,
 } from "./types.ts";
+
+// Settings
+export { SettingsManager } from "./settings.ts";
 
 // Provider types
 export type {
