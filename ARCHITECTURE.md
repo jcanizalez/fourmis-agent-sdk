@@ -19,11 +19,11 @@ fourmis-agents is structured in 5 layers, from bottom (provider APIs) to top (pu
 │  Glob, Grep) + MCP tools + subagent tools       │
 ├─────────────────────────────────────────────────┤
 │  Layer 2: Provider Adapters                     │
-│  Anthropic, OpenAI adapters                     │
+│  Anthropic, OpenAI, Gemini adapters             │
 │  Normalize: messages, tool calls, streaming     │
 ├─────────────────────────────────────────────────┤
 │  Layer 1: Provider APIs                         │
-│  @anthropic-ai/sdk, openai                      │
+│  @anthropic-ai/sdk, openai, @google/genai       │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -32,8 +32,9 @@ fourmis-agents is structured in 5 layers, from bottom (provider APIs) to top (pu
 Official SDKs for each provider:
 
 ```ts
-import Anthropic from "@anthropic-ai/sdk";  // Anthropic direct API
-import OpenAI from "openai";                 // OpenAI
+import Anthropic from "@anthropic-ai/sdk";      // Anthropic direct API
+import OpenAI from "openai";                    // OpenAI
+import { GoogleGenAI } from "@google/genai";    // Gemini (API key mode)
 ```
 
 No subprocess spawning — we call APIs directly.
@@ -52,7 +53,11 @@ interface ProviderAdapter {
 }
 ```
 
-The adapters handle translation of tool call formats (Anthropic's `content[].type = "tool_use"` vs OpenAI's `tool_calls[].function`) and tool result formats transparently.
+The adapters handle translation of tool call formats (Anthropic's `content[].type = "tool_use"` vs OpenAI's `tool_calls[].function` vs Gemini's `functionCall`/`functionResponse` parts) and tool result formats transparently.
+
+The Gemini adapter operates in two modes:
+- **API key mode** — uses `@google/genai` SDK with `generateContentStream()`
+- **OAuth mode** — direct HTTP to Google's Code Assist endpoint (`cloudcode-pa.googleapis.com`) with SSE streaming, using tokens from `gemini login` CLI
 
 New providers can be added via `registerProvider()`.
 
@@ -130,7 +135,8 @@ fourmis-agents/
 │   │   ├── types.ts             # ProviderAdapter interface, ChatRequest, ChatChunk
 │   │   ├── registry.ts          # Provider registry (register/get)
 │   │   ├── anthropic.ts         # Anthropic API adapter
-│   │   └── openai.ts            # OpenAI API adapter (API key + Codex OAuth)
+│   │   ├── openai.ts            # OpenAI API adapter (API key + Codex OAuth)
+│   │   └── gemini.ts            # Gemini API adapter (API key + CLI OAuth)
 │   │
 │   ├── tools/
 │   │   ├── registry.ts          # ToolRegistry class
@@ -157,7 +163,8 @@ fourmis-agents/
 │   │
 │   ├── auth/
 │   │   ├── login-openai.ts      # OpenAI Codex login flow
-│   │   └── openai-oauth.ts      # OpenAI OAuth token management
+│   │   ├── openai-oauth.ts      # OpenAI OAuth token management
+│   │   └── gemini-oauth.ts      # Gemini CLI OAuth token management
 │   │
 │   └── utils/
 │       ├── cost.ts              # Per-model cost tables

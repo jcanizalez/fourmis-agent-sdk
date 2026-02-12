@@ -14,7 +14,7 @@ The [Anthropic Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescr
 - **~12s startup overhead** per query (subprocess spawn)
 
 `fourmis-agents-sdk` provides:
-- **Multi-provider** — Anthropic (direct API) and OpenAI out of the box, extensible via `registerProvider()`
+- **Multi-provider** — Anthropic, OpenAI, and Gemini out of the box, extensible via `registerProvider()`
 - **Transparent agent loop** — you control the execution cycle
 - **No subprocess overhead** — direct API calls, <100ms startup
 - **In-process tool execution** — 6 built-in coding tools
@@ -46,16 +46,20 @@ for await (const msg of conversation) {
 
 ### Providers
 
-Two built-in providers, with an extensible registry:
+Three built-in providers, with an extensible registry:
 
 | Provider | Auth | Models |
 |----------|------|--------|
 | `anthropic` | `ANTHROPIC_API_KEY` | Claude Sonnet, Opus, Haiku |
 | `openai` | `OPENAI_API_KEY` or Codex OAuth | GPT-4o, o3, etc. |
+| `gemini` | `GEMINI_API_KEY` or Gemini CLI OAuth | Gemini 2.5 Pro, Flash, etc. |
 
 ```ts
-// Use OpenAI instead
+// Use OpenAI
 query({ prompt: "...", options: { provider: "openai", model: "gpt-4o" } });
+
+// Use Gemini
+query({ prompt: "...", options: { provider: "gemini", model: "gemini-2.5-flash" } });
 
 // Register a custom provider
 import { registerProvider } from "fourmis-agents-sdk";
@@ -245,7 +249,7 @@ query({
   prompt: "...",
   options: {
     // Provider
-    provider: "anthropic",       // "anthropic" | "openai" | custom
+    provider: "anthropic",       // "anthropic" | "openai" | "gemini" | custom
     apiKey: "sk-...",            // Override env var
     baseUrl: "https://...",      // Custom endpoint
 

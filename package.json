@@ -1,6 +1,6 @@
 {
   "name": "fourmis-agents-sdk",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Multi-provider AI agent SDK with direct API access and in-process tool execution",
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./auth/openai": {
+      "types": "./dist/auth/openai-oauth.d.ts",
+      "import": "./dist/auth/openai-oauth.js"
+    },
+    "./auth/gemini": {
+      "types": "./dist/auth/gemini-oauth.d.ts",
+      "import": "./dist/auth/gemini-oauth.js"
     }
   },
   "files": [
