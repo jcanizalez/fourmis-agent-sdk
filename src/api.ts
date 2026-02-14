@@ -19,6 +19,8 @@ import { findLatestSession, loadSessionMessages, createSessionLogger } from "./u
 import type { NormalizedMessage } from "./providers/types.ts";
 import { createNativeMemoryTool, createMemoryTool } from "./memory/index.ts";
 import type { NativeMemoryTool } from "./memory/index.ts";
+import { loadSkills } from "./skills/index.ts";
+import type { Skill } from "./skills/index.ts";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TURNS = 10;
@@ -74,11 +76,30 @@ export function query(params: {
     options.disallowedTools,
   );
 
+  // Skills — load from default locations + explicit paths
+  let skills: Skill[] = [];
+  {
+    const skillsResult = loadSkills({
+      cwd: options.cwd,
+      skillPaths: options.skillPaths,
+      includeDefaults: options.includeDefaultSkills !== false,
+    });
+    skills = skillsResult.skills;
+
+    // Log diagnostics in debug mode
+    if (options.debug && skillsResult.diagnostics.length > 0) {
+      for (const d of skillsResult.diagnostics) {
+        console.warn(`[skills] ${d.type}: ${d.message} (${d.path})`);
+      }
+    }
+  }
+
   // Build system prompt
   const systemPrompt = options.systemPrompt ?? buildSystemPrompt({
     tools: registry.list(),
     cwd: options.cwd,
     customPrompt: options.appendSystemPrompt,
+    skills,
   });
 
   // Settings manager (file-based permissions)

@@ -269,6 +269,25 @@ export type QueryOptions = {
   // Subagents
   agents?: Record<string, import("./agents/types.ts").AgentDefinition>;
 
+  // Skills
+  /**
+   * Paths to skill files or directories to load.
+   * Skills are SKILL.md files with YAML frontmatter (name, description).
+   * They get injected into the system prompt as available capabilities.
+   *
+   * By default, also scans ~/.claude/skills/ and .claude/skills/.
+   * Set `includeDefaultSkills: false` to disable default locations.
+   *
+   * Matches the Claude SDK's skill loading behavior.
+   */
+  skillPaths?: string[];
+
+  /**
+   * Whether to include default skill directories (~/.claude/skills, .claude/skills).
+   * Default: true
+   */
+  includeDefaultSkills?: boolean;
+
   // Memory
   /**
    * Absolute path to the memory directory.

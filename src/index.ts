@@ -88,6 +88,10 @@ export type {
 export { TaskManager } from "./agents/task-manager.ts";
 export type { AgentDefinition, BackgroundTask } from "./agents/types.ts";
 
+// Skills
+export { loadSkills, loadSkillsFromDir, formatSkillsForPrompt, parseFrontmatter, stripFrontmatter } from "./skills/index.ts";
+export type { Skill, SkillFrontmatter, SkillDiagnostic, LoadSkillsResult, LoadSkillsFromDirOptions, LoadSkillsOptions, ParsedFrontmatter } from "./skills/index.ts";
+
 // Memory
 export { createMemoryHandler, createNativeMemoryTool, createMemoryTool } from "./memory/index.ts";
 export type { MemoryConfig, NativeMemoryTool, MemoryCommand } from "./memory/index.ts";

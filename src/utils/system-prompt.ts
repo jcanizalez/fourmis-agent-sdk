@@ -4,6 +4,8 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Skill } from "../skills/index.ts";
+import { formatSkillsForPrompt } from "../skills/index.ts";
 
 const CORE_IDENTITY = `You are an AI coding agent. You help users with software engineering tasks by reading, writing, and modifying code. You have access to tools that let you interact with the filesystem and execute commands.
 
@@ -68,6 +70,7 @@ export type SystemPromptContext = {
   cwd?: string;
   permissionMode?: string;
   customPrompt?: string;
+  skills?: Skill[];
 };
 
 export function buildSystemPrompt(context: SystemPromptContext): string {
@@ -91,6 +94,14 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
     const instructions = readProjectInstructions(context.cwd);
     if (instructions) {
       sections.push(`# Project Instructions\n\n${instructions}`);
+    }
+  }
+
+  // Skills — injected as XML per Agent Skills standard
+  if (context.skills && context.skills.length > 0) {
+    const skillsPrompt = formatSkillsForPrompt(context.skills);
+    if (skillsPrompt) {
+      sections.push(`# Skills\n\n${skillsPrompt}`);
     }
   }
 
