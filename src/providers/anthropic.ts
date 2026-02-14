@@ -90,17 +90,37 @@ export class AnthropicAdapter implements ProviderAdapter {
       params.system = request.systemPrompt;
     }
 
+    // Build the combined tools array: regular tools + native tools (e.g. memory)
+    const allTools: unknown[] = [];
     if (tools && tools.length > 0) {
-      params.tools = tools;
+      allTools.push(...tools);
+    }
+    if (request.nativeTools && request.nativeTools.length > 0) {
+      allTools.push(...request.nativeTools);
+    }
+    if (allTools.length > 0) {
+      params.tools = allTools as Anthropic.MessageCreateParamsStreaming["tools"];
     }
 
     if (request.temperature !== undefined) {
       params.temperature = request.temperature;
     }
 
-    const stream = this.client.messages.stream(params, {
+    // Check if we need beta headers (e.g. memory tool)
+    const hasMemoryTool = request.nativeTools?.some(
+      (t: any) => t.type === "memory_20250818",
+    );
+
+    const requestOptions: Record<string, unknown> = {
       signal: request.signal,
-    });
+    };
+    if (hasMemoryTool) {
+      requestOptions.headers = {
+        "anthropic-beta": "context-management-2025-06-27",
+      };
+    }
+
+    const stream = this.client.messages.stream(params, requestOptions as any);
 
     // Track accumulated tool call JSON for parsing
     const toolInputBuffers = new Map<number, { id: string; name: string; json: string }>();

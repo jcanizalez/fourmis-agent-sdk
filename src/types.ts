@@ -269,6 +269,15 @@ export type QueryOptions = {
   // Subagents
   agents?: Record<string, import("./agents/types.ts").AgentDefinition>;
 
+  // Memory
+  /**
+   * Absolute path to the memory directory.
+   * When set, enables the memory tool for the agent.
+   * For Anthropic: uses native memory_20250818 tool type.
+   * For OpenAI/Gemini: registers a standard function tool.
+   */
+  memoryPath?: string;
+
   // Debug
   debug?: boolean;
   signal?: AbortSignal;

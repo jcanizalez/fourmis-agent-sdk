@@ -21,6 +21,8 @@ import type { ToolRegistry, ToolContext } from "./tools/registry.ts";
 import type { PermissionManager } from "./permissions.ts";
 import type { HookManager } from "./hooks.ts";
 import type { McpClientManager } from "./mcp/client.ts";
+import type { NativeMemoryTool } from "./memory/index.ts";
+import type { MemoryCommand } from "./memory/index.ts";
 
 export type SessionLogger = (
   role: "user" | "assistant",
@@ -46,6 +48,8 @@ export type AgentLoopOptions = {
   mcpClient?: McpClientManager;
   previousMessages?: NormalizedMessage[];
   sessionLogger?: SessionLogger;
+  /** Native memory tool for Anthropic provider (handled specially) */
+  nativeMemoryTool?: NativeMemoryTool;
 };
 
 export async function* agentLoop(
@@ -70,6 +74,7 @@ export async function* agentLoop(
     mcpClient,
     previousMessages,
     sessionLogger,
+    nativeMemoryTool,
   } = options;
 
   const startTime = Date.now();
@@ -145,6 +150,11 @@ export async function* agentLoop(
     let toolCalls: { id: string; name: string; input: unknown }[] = [];
     let turnUsage = emptyTokenUsage();
 
+    // Build native tools array for the provider (e.g. Anthropic memory tool)
+    const nativeTools: unknown[] | undefined = nativeMemoryTool
+      ? [nativeMemoryTool.definition]
+      : undefined;
+
     try {
       const chunks = provider.chat({
         model,
@@ -152,6 +162,7 @@ export async function* agentLoop(
         tools: toolDefs.length > 0 ? toolDefs : undefined,
         systemPrompt,
         signal,
+        nativeTools,
       });
 
       for await (const chunk of chunks) {
@@ -370,15 +381,28 @@ export async function* agentLoop(
         uuid: uuid(),
       };
 
-      // Execute tool
-      const toolCtx: ToolContext = {
-        cwd,
-        signal,
-        sessionId,
-        env,
-      };
+      // Execute tool — route memory tool calls to the native handler if available
+      let result: { content: string; isError?: boolean };
 
-      const result = await tools.execute(call.name, toolInput, toolCtx);
+      if (call.name === "memory" && nativeMemoryTool) {
+        // Native memory tool (Anthropic): execute via memory handler
+        try {
+          const content = await nativeMemoryTool.execute(toolInput as MemoryCommand);
+          result = { content, isError: content.startsWith("Error:") };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          result = { content: `Error: ${message}`, isError: true };
+        }
+      } else {
+        // Regular tool execution
+        const toolCtx: ToolContext = {
+          cwd,
+          signal,
+          sessionId,
+          env,
+        };
+        result = await tools.execute(call.name, toolInput, toolCtx);
+      }
 
       if (debug) {
         console.error(`[debug] Tool ${call.name}: ${result.isError ? "ERROR" : "OK"} (${result.content.length} chars)`);

@@ -17,6 +17,8 @@ import { createTaskTool, createTaskOutputTool, createTaskStopTool } from "./agen
 import { TaskManager } from "./agents/task-manager.ts";
 import { findLatestSession, loadSessionMessages, createSessionLogger } from "./utils/session-store.ts";
 import type { NormalizedMessage } from "./providers/types.ts";
+import { createNativeMemoryTool, createMemoryTool } from "./memory/index.ts";
+import type { NativeMemoryTool } from "./memory/index.ts";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TURNS = 10;
@@ -187,6 +189,19 @@ export function query(params: {
     registry.register(createTaskStopTool(taskManager));
   }
 
+  // Memory — provider-agnostic setup
+  let nativeMemoryTool: NativeMemoryTool | undefined;
+  if (options.memoryPath) {
+    const memoryConfig = { path: options.memoryPath };
+    if (providerName === "anthropic") {
+      // Anthropic: use native memory_20250818 tool type (handled by provider)
+      nativeMemoryTool = createNativeMemoryTool(memoryConfig);
+    } else {
+      // OpenAI/Gemini: register as a standard function tool
+      registry.register(createMemoryTool(memoryConfig));
+    }
+  }
+
   // Create agent loop generator
   const generator = agentLoop(prompt, {
     provider,
@@ -206,6 +221,7 @@ export function query(params: {
     mcpClient,
     previousMessages,
     sessionLogger,
+    nativeMemoryTool,
   });
 
   return createQuery(generator, abortController);

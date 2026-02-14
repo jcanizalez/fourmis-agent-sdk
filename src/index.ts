@@ -87,3 +87,7 @@ export type {
 // Subagents
 export { TaskManager } from "./agents/task-manager.ts";
 export type { AgentDefinition, BackgroundTask } from "./agents/types.ts";
+
+// Memory
+export { createMemoryHandler, createNativeMemoryTool, createMemoryTool } from "./memory/index.ts";
+export type { MemoryConfig, NativeMemoryTool, MemoryCommand } from "./memory/index.ts";

@@ -57,6 +57,12 @@ export type ChatRequest = {
   temperature?: number;
   thinkingBudget?: number;
   signal?: AbortSignal;
+  /**
+   * Provider-specific native tools (e.g. Anthropic's memory_20250818).
+   * These bypass the normal tool definition format and are passed directly
+   * to the provider's API alongside converted regular tools.
+   */
+  nativeTools?: unknown[];
 };
 
 // ─── Chat Chunks (Streaming) ────────────────────────────────────────────────
