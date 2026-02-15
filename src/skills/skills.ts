@@ -17,6 +17,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
+const MAX_COMPATIBILITY_LENGTH = 500;
 const CONFIG_DIR_NAME = ".claude";
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 
@@ -26,6 +27,14 @@ export interface SkillFrontmatter {
   name?: string;
   description?: string;
   "disable-model-invocation"?: boolean;
+  /** License name or reference to a bundled license file. (Agent Skills spec) */
+  license?: string;
+  /** Environment requirements — max 500 chars. (Agent Skills spec) */
+  compatibility?: string;
+  /** Arbitrary key-value metadata. (Agent Skills spec) */
+  metadata?: Record<string, string>;
+  /** Space-delimited list of pre-approved tools. Experimental. (Agent Skills spec) */
+  "allowed-tools"?: string;
   [key: string]: unknown;
 }
 
@@ -36,6 +45,14 @@ export interface Skill {
   baseDir: string;
   source: string;
   disableModelInvocation: boolean;
+  /** License (Agent Skills spec) */
+  license?: string;
+  /** Environment compatibility note (Agent Skills spec) */
+  compatibility?: string;
+  /** Arbitrary metadata (Agent Skills spec) */
+  metadata?: Record<string, string>;
+  /** Pre-approved tools list (Agent Skills spec, experimental) */
+  allowedTools?: string[];
 }
 
 export interface SkillDiagnostic {
@@ -115,6 +132,14 @@ function validateDescription(description: string | undefined): string[] {
   }
 
   return errors;
+}
+
+function validateCompatibility(compatibility: string | undefined): string[] {
+  if (!compatibility) return [];
+  if (compatibility.length > MAX_COMPATIBILITY_LENGTH) {
+    return [`compatibility exceeds ${MAX_COMPATIBILITY_LENGTH} characters (${compatibility.length})`];
+  }
+  return [];
 }
 
 // ─── Loading ────────────────────────────────────────────────────────────────
@@ -218,10 +243,22 @@ function loadSkillFromFile(
       diagnostics.push({ type: "warning", message: error, path: filePath });
     }
 
+    // Validate compatibility (Agent Skills spec: max 500 chars)
+    const compatErrors = validateCompatibility(frontmatter.compatibility);
+    for (const error of compatErrors) {
+      diagnostics.push({ type: "warning", message: error, path: filePath });
+    }
+
     // Skip if description is completely missing
     if (!frontmatter.description || frontmatter.description.trim() === "") {
       return { skill: null, diagnostics };
     }
+
+    // Parse allowed-tools (space-delimited string → array)
+    const allowedToolsRaw = frontmatter["allowed-tools"];
+    const allowedTools = allowedToolsRaw
+      ? allowedToolsRaw.split(/\s+/).filter(Boolean)
+      : undefined;
 
     return {
       skill: {
@@ -231,6 +268,10 @@ function loadSkillFromFile(
         baseDir: skillDir,
         source,
         disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+        license: frontmatter.license,
+        compatibility: frontmatter.compatibility,
+        metadata: frontmatter.metadata,
+        allowedTools,
       },
       diagnostics,
     };
@@ -386,6 +427,9 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <description>${escapeXml(skill.description)}</description>`);
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.allowedTools?.length) {
+      lines.push(`    <allowed-tools>${escapeXml(skill.allowedTools.join(" "))}</allowed-tools>`);
+    }
     lines.push("  </skill>");
   }
 
