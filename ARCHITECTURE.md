@@ -1,206 +1,214 @@
-# Architecture: fourmis-agents
+# Architecture: fourmis-agents-sdk
 
 ## Overview
 
-fourmis-agents is structured in 5 layers, from bottom (provider APIs) to top (public API).
+`fourmis-agents-sdk` is organized in layered components from provider SDKs up to the public `query()` API.
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Layer 5: Public API                            │
-│  query() → AsyncGenerator<AgentMessage>         │
-│  createMcpServer(), mcpTool()                   │
-├─────────────────────────────────────────────────┤
-│  Layer 4: Agent Loop                            │
-│  prompt → LLM → tool calls → execute → repeat  │
-│  Permission checks, hooks, subagent spawn       │
-├─────────────────────────────────────────────────┤
-│  Layer 3: Tool System                           │
-│  Built-in tools (Bash, Read, Write, Edit,       │
-│  Glob, Grep) + MCP tools + subagent tools       │
-├─────────────────────────────────────────────────┤
-│  Layer 2: Provider Adapters                     │
-│  Anthropic, OpenAI, Gemini adapters             │
-│  Normalize: messages, tool calls, streaming     │
-├─────────────────────────────────────────────────┤
-│  Layer 1: Provider APIs                         │
-│  @anthropic-ai/sdk, openai, @google/genai       │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Layer 5: Public API                                      │
+│ query(), Query controls, provider/tool/MCP exports       │
+├──────────────────────────────────────────────────────────┤
+│ Layer 4: Agent Loop                                      │
+│ prompt -> provider -> tool calls -> execution -> repeat  │
+│ hooks, permissions, subagents, memory, budgets           │
+├──────────────────────────────────────────────────────────┤
+│ Layer 3: Tool and Runtime Integration                    │
+│ built-in tools, MCP tools/resources, Task tools          │
+├──────────────────────────────────────────────────────────┤
+│ Layer 2: Provider Adapters                               │
+│ Anthropic/OpenAI/Gemini normalization                    │
+├──────────────────────────────────────────────────────────┤
+│ Layer 1: Provider SDKs / HTTP APIs                       │
+│ @anthropic-ai/sdk, openai, @google/genai, OAuth endpoints│
+└──────────────────────────────────────────────────────────┘
 ```
 
-## Layer 1: Provider APIs
+## Layer 1: Provider SDKs / APIs
 
-Official SDKs for each provider:
+- Anthropic: `@anthropic-ai/sdk`
+- OpenAI: `openai`
+- Gemini: `@google/genai` plus OAuth HTTP mode
 
-```ts
-import Anthropic from "@anthropic-ai/sdk";      // Anthropic direct API
-import OpenAI from "openai";                    // OpenAI
-import { GoogleGenAI } from "@google/genai";    // Gemini (API key mode)
-```
-
-No subprocess spawning — we call APIs directly.
+Fourmis executes these directly (no mandatory subprocess model for host query execution).
 
 ## Layer 2: Provider Adapters
 
-Each adapter implements `ProviderAdapter`, normalizing a provider's API into a common streaming interface:
+Adapters implement a common interface (`ProviderAdapter`) to normalize:
 
-```ts
-interface ProviderAdapter {
-  name: string;
-  chat(request: ChatRequest): AsyncGenerator<ChatChunk>;
-  calculateCost(model: string, usage: TokenUsage): number;
-  getContextWindow(model: string): number;
-  supportsFeature(feature: ProviderFeature): boolean;
-}
-```
+- message exchange
+- tool-call shape
+- streaming chunks
+- usage/cost accounting
+- feature capability checks
 
-The adapters handle translation of tool call formats (Anthropic's `content[].type = "tool_use"` vs OpenAI's `tool_calls[].function` vs Gemini's `functionCall`/`functionResponse` parts) and tool result formats transparently.
+Key files:
+- `src/providers/types.ts`
+- `src/providers/anthropic.ts`
+- `src/providers/openai.ts`
+- `src/providers/gemini.ts`
+- `src/providers/registry.ts`
 
-The Gemini adapter operates in two modes:
-- **API key mode** — uses `@google/genai` SDK with `generateContentStream()`
-- **OAuth mode** — direct HTTP to Google's Code Assist endpoint (`cloudcode-pa.googleapis.com`) with SSE streaming, using tokens from `gemini login` CLI
+Provider registry is lazy and extensible via `registerProvider()`.
 
-New providers can be added via `registerProvider()`.
-
-## Layer 3: Tool System
+## Layer 3: Tool and Runtime Integration
 
 ### Tool Registry
 
-```ts
-class ToolRegistry {
-  register(tool: ToolImplementation): void;
-  getDefinitions(): ToolDefinition[];
-  execute(name: string, input: unknown, context: ToolContext): Promise<ToolResult>;
-  list(): string[];
-}
-```
+`ToolRegistry` provides registration, definition export, and execution dispatch.
 
-6 built-in tools are available in 3 presets (`coding`, `readonly`, `minimal`). MCP tools and subagent tools (Task, TaskOutput, TaskStop) are registered dynamically at runtime.
+Key file:
+- `src/tools/registry.ts`
 
-### Tool Context
+### Built-in Tools
 
-```ts
-type ToolContext = {
-  cwd: string;
-  signal: AbortSignal;
-  sessionId: string;
-  env?: Record<string, string>;
-};
-```
+Current built-ins:
+
+- `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`
+- `NotebookEdit`, `WebFetch`, `WebSearch`
+- `TodoWrite`, `Config`, `AskUserQuestion`, `ExitPlanMode`
+
+Preset resolution defaults to `claude_code` and can also accept explicit arrays.
+
+Key files:
+- `src/tools/index.ts`
+- `src/tools/presets.ts`
+- `src/tools/*.ts`
+
+### MCP Integration
+
+`McpClientManager` connects configured servers and projects tools as namespaced tool IDs (`mcp__<server>__<tool>`), plus resource tools:
+
+- `mcp__list_resources`
+- `mcp__read_resource`
+
+Key files:
+- `src/mcp/client.ts`
+- `src/mcp/server.ts`
+- `src/mcp/types.ts`
+- `src/tools/mcp-resources.ts`
+
+### Subagents
+
+Subagent definitions are injected into runtime and surfaced through `Task`, `TaskOutput`, `TaskStop` tools.
+
+Key files:
+- `src/agents/types.ts`
+- `src/agents/task-manager.ts`
+- `src/agents/tools.ts`
 
 ## Layer 4: Agent Loop
 
-The core execution engine (`agent-loop.ts`). An `AsyncGenerator<AgentMessage>` that:
+`agent-loop.ts` is the core execution engine and emits Claude-compatible envelopes.
 
-1. Sends messages to the LLM via the provider adapter
-2. Streams text deltas as events
-3. Collects tool calls from the response
-4. Fires `PreToolUse` hooks (can deny or modify input)
-5. Checks permissions via `PermissionManager`
-6. Executes tools via the registry
-7. Fires `PostToolUse` / `PostToolUseFailure` hooks
-8. Feeds results back to the LLM
-9. Repeats until no tool calls remain or limits are hit
+Main flow:
 
-Limits: `maxTurns`, `maxBudgetUsd`, `AbortSignal`.
+1. Initialize session/system state.
+2. Send conversation to selected provider adapter.
+3. Collect `assistant` text/tool-use blocks.
+4. Apply hooks (`PreToolUse` etc.) and permission decisions.
+5. Execute tool calls through registry.
+6. Append tool results as `user` content.
+7. Repeat until completion or a terminal condition.
+8. Emit terminal `result` (`success` or error subtype).
+
+Terminal controls/limits:
+
+- `maxTurns`
+- `maxBudgetUsd`
+- abort signal
+- structured output retry bounds
+
+Related files:
+- `src/agent-loop.ts`
+- `src/permissions.ts`
+- `src/hooks.ts`
+- `src/settings.ts`
+- `src/utils/session-store.ts`
+- `src/memory/*`
+- `src/skills/*`
 
 ## Layer 5: Public API
 
 ### `query()`
 
-Single entry point — creates a provider, builds a tool registry, sets up permissions/hooks/MCP/subagents, and returns a `Query` (AsyncGenerator with `interrupt()` and `close()` control methods).
+`query()` builds runtime state and returns a `Query` (async iterable + controls).
 
-### `createMcpServer()` / `mcpTool()`
+Controls include:
 
-Create in-process MCP servers with Zod-typed tool definitions.
+- `interrupt()`, `close()`
+- `setPermissionMode()`, `setModel()`, `setMaxThinkingTokens()`
+- `supportedModels()`, `supportedCommands()`, `initializationResult()`
+- MCP runtime controls (`mcpServerStatus`, `toggleMcpServer`, `setMcpServers`, ...)
 
-### `registerProvider()` / `getProvider()`
+Key files:
+- `src/api.ts`
+- `src/query.ts`
+- `src/index.ts`
 
-Manage the provider registry. Built-in providers (`anthropic`, `openai`) are lazy-created on first use.
+## Message Contract
 
-## File Structure
+Fourmis emits Claude-style `SDKMessage` unions (`AgentMessage`) with core envelopes:
+
+- `system` (`init`, `status`, hook/task metadata)
+- `assistant` (text/tool_use blocks)
+- `user` (tool_result blocks)
+- `stream_event`
+- `tool_progress`, `tool_use_summary`
+- `result` (`success` or error subtype)
+
+Key file:
+- `src/types.ts`
+
+## Compatibility Harness Architecture
+
+`tests/compat` provides strict side-by-side regression checks against `@anthropic-ai/claude-agent-sdk`.
+
+Components:
+
+- scenario definitions: `tests/compat/scenarios.ts`
+- pair runner + trace normalization: `tests/compat/harness.ts`
+- assertion engine (sdk + parity): `tests/compat/assertions.ts`
+- report/artifact writer: `tests/compat/report.ts`
+- orchestrator entrypoint: `tests/compat/run-compat.ts`
+
+Artifacts:
+
+- per-run `summary.json`
+- human-readable `report.md`
+- per-scenario normalized traces for both SDKs
+
+## Updated Repository Map
 
 ```
-fourmis-agents/
+fourmis-agent-sdk/
 ├── src/
-│   ├── index.ts                 # Public API exports
-│   ├── api.ts                   # query() implementation
-│   ├── query.ts                 # Query wrapper (AsyncGenerator + control methods)
-│   ├── types.ts                 # All core types (messages, permissions, options)
-│   ├── agent-loop.ts            # Core agent execution loop
-│   ├── permissions.ts           # Permission manager (6 modes + rules + callback)
-│   ├── hooks.ts                 # Hook system (12 event types)
-│   ├── settings.ts              # Settings file loader (.claude/settings*.json)
-│   │
-│   ├── providers/
-│   │   ├── types.ts             # ProviderAdapter interface, ChatRequest, ChatChunk
-│   │   ├── registry.ts          # Provider registry (register/get)
-│   │   ├── anthropic.ts         # Anthropic API adapter
-│   │   ├── openai.ts            # OpenAI API adapter (API key + Codex OAuth)
-│   │   └── gemini.ts            # Gemini API adapter (API key + CLI OAuth)
-│   │
-│   ├── tools/
-│   │   ├── registry.ts          # ToolRegistry class
-│   │   ├── presets.ts           # Tool presets (coding, readonly, minimal)
-│   │   ├── bash.ts              # Shell execution via Bun.spawn()
-│   │   ├── read.ts              # File reading with line numbers
-│   │   ├── write.ts             # File creation/overwriting
-│   │   ├── edit.ts              # String replacement editing
-│   │   ├── glob.ts              # File pattern matching
-│   │   ├── grep.ts              # Regex content search
-│   │   └── mcp-resources.ts     # MCP resource listing/reading tools
-│   │
-│   ├── mcp/
-│   │   ├── index.ts             # Re-exports
-│   │   ├── client.ts            # MCP client (connect to external servers)
-│   │   ├── server.ts            # In-process MCP server + tool() helper
-│   │   └── types.ts             # MCP config types (stdio, SSE, HTTP, SDK)
-│   │
+│   ├── api.ts
+│   ├── agent-loop.ts
+│   ├── hooks.ts
+│   ├── index.ts
+│   ├── permissions.ts
+│   ├── query.ts
+│   ├── settings.ts
+│   ├── types.ts
 │   ├── agents/
-│   │   ├── index.ts             # Re-exports
-│   │   ├── types.ts             # AgentDefinition, BackgroundTask
-│   │   ├── task-manager.ts      # Background task lifecycle
-│   │   └── tools.ts             # Task, TaskOutput, TaskStop tool implementations
-│   │
 │   ├── auth/
-│   │   ├── login-openai.ts      # OpenAI Codex login flow
-│   │   ├── openai-oauth.ts      # OpenAI OAuth token management
-│   │   └── gemini-oauth.ts      # Gemini CLI OAuth token management
-│   │
+│   ├── mcp/
+│   ├── memory/
+│   ├── providers/
+│   ├── skills/
+│   ├── tools/
 │   └── utils/
-│       ├── cost.ts              # Per-model cost tables
-│       └── system-prompt.ts     # Default system prompt builder
-│
 ├── tests/
+│   ├── agents/
+│   ├── auth/
+│   ├── compat/
+│   ├── mcp/
+│   ├── providers/
+│   ├── tools/
 │   ├── agent-loop.test.ts
 │   ├── hooks.test.ts
-│   ├── integration.test.ts
-│   ├── providers/
-│   │   ├── anthropic.test.ts
-│   │   ├── openai.test.ts
-│   │   └── openai-integration.test.ts
-│   ├── tools/
-│   │   ├── bash.test.ts
-│   │   ├── edit.test.ts
-│   │   ├── glob.test.ts
-│   │   ├── grep.test.ts
-│   │   ├── read.test.ts
-│   │   └── write.test.ts
-│   ├── mcp/
-│   │   ├── client.test.ts
-│   │   ├── sdk-server.test.ts
-│   │   └── integration.test.ts
-│   ├── agents/
-│   │   ├── task-manager.test.ts
-│   │   ├── tools.test.ts
-│   │   └── integration.test.ts
-│   ├── auth/
-│   │   ├── openai-oauth.test.ts
-│   │   └── openai-codex-integration.test.ts
-│   └── compare/               # SDK comparison scenarios
-│       └── scenarios/
-│
-├── package.json
-├── tsconfig.json
+│   └── integration.test.ts
 ├── README.md
 └── ARCHITECTURE.md
 ```
