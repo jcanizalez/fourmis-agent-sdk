@@ -10,10 +10,11 @@ import { PermissionManager } from "./permissions.ts";
 import { SettingsManager } from "./settings.ts";
 import { buildSystemPrompt } from "./utils/system-prompt.ts";
 import { agentLoop } from "./agent-loop.ts";
-import { createQuery } from "./query.ts";
+import { createQuery, type QueryControlHandlers } from "./query.ts";
 import { HookManager } from "./hooks.ts";
 import { McpClientManager } from "./mcp/client.ts";
 import { createTaskTool, createTaskOutputTool, createTaskStopTool } from "./agents/tools.ts";
+import { createListMcpResourcesTool, createReadMcpResourceTool } from "./tools/mcp-resources.ts";
 import { TaskManager } from "./agents/task-manager.ts";
 import { findLatestSession, loadSessionMessages, createSessionLogger } from "./utils/session-store.ts";
 import type { NormalizedMessage } from "./providers/types.ts";
@@ -40,23 +41,33 @@ const DEFAULT_MAX_BUDGET_USD = 5;
  *     provider: "anthropic",
  *     model: "claude-sonnet-4-5-20250929",
  *     cwd: "/my/project",
- *     tools: "coding",
+ *     tools: { type: "preset", preset: "claude_code" },
  *     maxTurns: 5,
  *   },
  * });
  *
  * for await (const msg of conversation) {
- *   if (msg.type === "text") process.stdout.write(msg.text);
- *   if (msg.type === "tool_use") console.log(`\n[tool] ${msg.name}`);
- *   if (msg.type === "result") console.log(`\nDone: $${msg.costUsd}`);
+ *   if (msg.type === "assistant") {
+ *     for (const block of msg.message.content) {
+ *       if (block.type === "text") process.stdout.write(block.text);
+ *     }
+ *   }
+ *   if (msg.type === "result") console.log(`\nDone: $${msg.total_cost_usd}`);
  * }
  * ```
  */
 export function query(params: {
-  prompt: string;
+  prompt: string | AsyncIterable<import("./types.ts").SDKUserMessage>;
   options?: QueryOptions;
 }): Query {
-  const { prompt, options = {} } = params;
+  const { options = {} } = params;
+  const prompt = params.prompt;
+
+  if (typeof prompt !== "string") {
+    throw new Error(
+      "query({ prompt: AsyncIterable }) is not supported in single-prompt mode yet. Use Query.streamInput() in a streaming session.",
+    );
+  }
 
   // Resolve provider
   const providerName = options.provider ?? "anthropic";
@@ -67,6 +78,29 @@ export function query(params: {
 
   // Resolve model
   const model = options.model ?? DEFAULT_MODEL;
+  const fallbackModel = options.fallbackModel;
+  const modelState = { current: model };
+
+  const resolvedThinkingBudget = (() => {
+    if (options.thinking) {
+      switch (options.thinking.type) {
+        case "disabled":
+          return 0;
+        case "enabled":
+          return options.thinking.budgetTokens;
+        case "adaptive":
+          return undefined;
+      }
+    }
+    return options.maxThinkingTokens;
+  })();
+  const maxThinkingTokensState = { current: resolvedThinkingBudget };
+
+  if (options.permissionMode === "bypassPermissions" && options.allowDangerouslySkipPermissions !== true) {
+    throw new Error(
+      'permissionMode "bypassPermissions" requires allowDangerouslySkipPermissions: true',
+    );
+  }
 
   // Resolve tools
   const toolNames = resolveToolNames(options.tools);
@@ -95,12 +129,24 @@ export function query(params: {
   }
 
   // Build system prompt
-  const systemPrompt = options.systemPrompt ?? buildSystemPrompt({
-    tools: registry.list(),
-    cwd: options.cwd,
-    customPrompt: options.appendSystemPrompt,
-    skills,
-  });
+  const systemPrompt = (() => {
+    if (typeof options.systemPrompt === "string") {
+      return options.systemPrompt;
+    }
+
+    const appendedPrompt = typeof options.systemPrompt === "object"
+      ? [options.systemPrompt.append, options.appendSystemPrompt].filter(Boolean).join("\n\n")
+      : options.appendSystemPrompt;
+
+    return buildSystemPrompt({
+      tools: registry.list(),
+      cwd: options.cwd,
+      additionalDirectories: options.additionalDirectories,
+      loadProjectInstructions: Array.isArray(options.settingSources) && options.settingSources.includes("project"),
+      customPrompt: appendedPrompt,
+      skills,
+    });
+  })();
 
   // Settings manager (file-based permissions)
   let settingsManager: SettingsManager | undefined;
@@ -165,7 +211,7 @@ export function query(params: {
     }
   } else if (options.resume) {
     // Resume a specific session by ID
-    previousMessages = loadSessionMessages(cwd, options.resume);
+    previousMessages = loadSessionMessages(cwd, options.resume, options.resumeSessionAt);
     if (options.forkSession) {
       sessionId = uuid();
     } else {
@@ -178,7 +224,7 @@ export function query(params: {
   const sessionLogger = persistSession ? createSessionLogger(cwd, sessionId, model) : undefined;
 
   // Abort controller
-  const abortController = new AbortController();
+  const abortController = options.abortController ?? new AbortController();
   if (options.signal) {
     options.signal.addEventListener("abort", () => abortController.abort(), { once: true });
   }
@@ -190,6 +236,15 @@ export function query(params: {
   const mcpClient = options.mcpServers && Object.keys(options.mcpServers).length > 0
     ? new McpClientManager(options.mcpServers)
     : undefined;
+  const syncMcpTools = () => {
+    if (!mcpClient) return;
+    registry.clearByPrefix("mcp__");
+    for (const tool of mcpClient.getTools()) {
+      registry.register(tool);
+    }
+    registry.register(createListMcpResourcesTool(mcpClient));
+    registry.register(createReadMcpResourceTool(mcpClient));
+  };
 
   // Subagents
   if (options.agents && Object.keys(options.agents).length > 0) {
@@ -197,7 +252,7 @@ export function query(params: {
     const agentCtx = {
       agents: options.agents,
       parentProvider: provider,
-      parentModel: model,
+      parentModel: modelState.current,
       parentPermissions: permissions,
       parentHooks: hookManager,
       parentCwd: cwd,
@@ -227,6 +282,12 @@ export function query(params: {
   const generator = agentLoop(prompt, {
     provider,
     model,
+    modelState,
+    maxThinkingTokensState,
+    fallbackModel,
+    thinking: options.thinking,
+    effort: options.effort,
+    outputFormat: options.outputFormat,
     systemPrompt,
     tools: registry,
     permissions,
@@ -234,7 +295,7 @@ export function query(params: {
     sessionId,
     maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
     maxBudgetUsd: options.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
-    includeStreamEvents: options.includeStreamEvents ?? false,
+    includePartialMessages: options.includePartialMessages ?? false,
     signal: abortController.signal,
     env: options.env,
     debug: options.debug,
@@ -243,7 +304,91 @@ export function query(params: {
     previousMessages,
     sessionLogger,
     nativeMemoryTool,
+    initMeta: {
+      betas: options.betas,
+      outputStyle: "default",
+      slashCommands: skills.map((s) => `/${s.name}`),
+      skills: skills.map((s) => s.name),
+      plugins: options.plugins,
+      agents: options.agents ? Object.keys(options.agents) : undefined,
+    },
   });
 
-  return createQuery(generator, abortController);
+  const controls: QueryControlHandlers = {
+    async setPermissionMode(mode) {
+      permissions.setMode(mode);
+    },
+    async setModel(nextModel) {
+      modelState.current = nextModel ?? model;
+    },
+    async setMaxThinkingTokens(maxThinkingTokens) {
+      maxThinkingTokensState.current = maxThinkingTokens ?? undefined;
+    },
+    async initializationResult() {
+      const models = provider.listModels ? await provider.listModels() : [];
+      return {
+        commands: skills.map((s) => ({
+          name: s.name,
+          description: s.description,
+          argumentHint: "",
+        })),
+        output_style: "default",
+        available_output_styles: ["default"],
+        models,
+        account: {},
+      };
+    },
+    async supportedCommands() {
+      return skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        argumentHint: "",
+      }));
+    },
+    async supportedModels() {
+      return provider.listModels ? await provider.listModels() : [];
+    },
+    async mcpServerStatus() {
+      return mcpClient ? mcpClient.status() : [];
+    },
+    async accountInfo() {
+      return {
+        tokenSource: options.apiKey ? "api-key" : "runtime",
+        apiKeySource: options.apiKey ? "explicit" : "env_or_oauth",
+      };
+    },
+    async rewindFiles(_userMessageId, _options) {
+      if (!options.enableFileCheckpointing) {
+        return {
+          canRewind: false,
+          error: "File checkpointing is disabled. Set enableFileCheckpointing: true.",
+        };
+      }
+      return {
+        canRewind: false,
+        error: "File checkpoint rewind is not implemented in fourmis-agent-sdk yet.",
+      };
+    },
+    async reconnectMcpServer(serverName) {
+      if (!mcpClient) throw new Error("No MCP servers are configured for this query.");
+      await mcpClient.reconnectServer(serverName);
+      syncMcpTools();
+    },
+    async toggleMcpServer(serverName, enabled) {
+      if (!mcpClient) throw new Error("No MCP servers are configured for this query.");
+      await mcpClient.toggleServer(serverName, enabled);
+      syncMcpTools();
+    },
+    async setMcpServers(servers) {
+      if (!mcpClient) throw new Error("No MCP client is available for this query.");
+      const result = await mcpClient.setServers(servers);
+      syncMcpTools();
+      return result;
+    },
+    async streamInput() {
+      throw new Error("Query.streamInput is not implemented for single-prompt query mode.");
+    },
+  };
+
+  return createQuery(generator, abortController, controls);
 }

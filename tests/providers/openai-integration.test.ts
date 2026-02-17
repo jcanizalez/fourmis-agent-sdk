@@ -16,10 +16,11 @@ test.skipIf(!hasApiKey)("end-to-end: OpenAI reads file and reports", async () =>
       provider: "openai",
       model: "gpt-4.1-mini",
       cwd: "/root/dev/fourmis-agent-sdk",
-      tools: "coding",
+      tools: { type: "preset", preset: "claude_code" },
       maxTurns: 5,
       maxBudgetUsd: 0.10,
       permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
     },
   });
 
@@ -29,19 +30,27 @@ test.skipIf(!hasApiKey)("end-to-end: OpenAI reads file and reports", async () =>
   }
 
   // Should have init
-  expect(messages.some((m) => m.type === "init")).toBe(true);
+  expect(messages.some((m) => m.type === "system" && m.subtype === "init")).toBe(true);
 
   // Should have used the Read tool
-  const toolUse = messages.find((m) => m.type === "tool_use") as any;
+  const toolUse = messages
+    .filter((m) => m.type === "assistant")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_use");
   expect(toolUse).toBeDefined();
-  expect(toolUse.name).toBe("Read");
+  expect((toolUse as any).name).toBe("Read");
 
   // Should have a success result
   const result = messages.find((m) => m.type === "result" && m.subtype === "success") as any;
   expect(result).toBeDefined();
-  expect(result.costUsd).toBeGreaterThan(0);
+  expect(result.total_cost_usd).toBeGreaterThan(0);
 
   // Should mention the project name
-  const textMsg = messages.filter((m) => m.type === "text").map((m: any) => m.text).join("");
+  const textMsg = messages
+    .filter((m) => m.type === "assistant")
+    .flatMap((m: any) => m.message.content)
+    .filter((c: any) => c.type === "text")
+    .map((c: any) => c.text)
+    .join("");
   expect(textMsg.toLowerCase()).toContain("fourmis");
 }, 30_000);

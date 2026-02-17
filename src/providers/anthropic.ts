@@ -77,6 +77,46 @@ export class AnthropicAdapter implements ProviderAdapter {
       stream: true,
     };
 
+    if (request.thinking) {
+      switch (request.thinking.type) {
+        case "adaptive":
+          params.thinking = { type: "adaptive" };
+          break;
+        case "disabled":
+          params.thinking = { type: "disabled" };
+          break;
+        case "enabled":
+          params.thinking = {
+            type: "enabled",
+            budget_tokens: request.thinking.budgetTokens,
+          };
+          break;
+      }
+    } else if (request.thinkingBudget !== undefined) {
+      if (request.thinkingBudget <= 0) {
+        params.thinking = { type: "disabled" };
+      } else {
+        params.thinking = {
+          type: "enabled",
+          budget_tokens: Math.max(1024, request.thinkingBudget),
+        };
+      }
+    }
+
+    const outputConfig: { effort?: "low" | "medium" | "high" | "max"; format?: Anthropic.JSONOutputFormat } = {};
+    if (request.effort) {
+      outputConfig.effort = request.effort;
+    }
+    if (request.outputFormat?.type === "json_schema") {
+      outputConfig.format = {
+        type: "json_schema",
+        schema: request.outputFormat.schema,
+      };
+    }
+    if (Object.keys(outputConfig).length > 0) {
+      params.output_config = outputConfig;
+    }
+
     // OAuth tokens require the Claude Code identity in the system prompt
     if (this.oauthMode) {
       const systemBlocks: { type: "text"; text: string }[] = [
@@ -221,11 +261,12 @@ export class AnthropicAdapter implements ProviderAdapter {
     switch (feature) {
       case "streaming":
       case "tool_calling":
-      case "image_input":
-      case "pdf_input":
       case "thinking":
       case "structured_output":
         return true;
+      case "image_input":
+      case "pdf_input":
+        return false;
       default:
         return false;
     }

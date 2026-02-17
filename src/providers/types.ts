@@ -3,7 +3,7 @@
  * Normalizes all LLM APIs into a common contract.
  */
 
-import type { TokenUsage } from "../types.ts";
+import type { TokenUsage, ThinkingConfig, Effort, OutputFormat } from "../types.ts";
 
 // ─── Tool Definition ────────────────────────────────────────────────────────
 
@@ -56,6 +56,9 @@ export type ChatRequest = {
   maxTokens?: number;
   temperature?: number;
   thinkingBudget?: number;
+  thinking?: ThinkingConfig;
+  effort?: Effort;
+  outputFormat?: OutputFormat;
   signal?: AbortSignal;
   /**
    * Provider-specific native tools (e.g. Anthropic's memory_20250818).

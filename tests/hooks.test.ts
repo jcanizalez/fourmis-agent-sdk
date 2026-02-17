@@ -251,7 +251,7 @@ test("PreToolUse hook denies → tool not executed", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     hooks,
   })) {
@@ -262,9 +262,12 @@ test("PreToolUse hook denies → tool not executed", async () => {
   expect(toolExecuted).toHaveLength(0);
 
   // Should have a denied tool_result
-  const toolResult = messages.find((m) => m.type === "tool_result");
+  const toolResult = messages
+    .filter((m) => m.type === "user")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_result");
   expect(toolResult).toBeDefined();
-  expect((toolResult as any).isError).toBe(true);
+  expect((toolResult as any).is_error).toBe(true);
   expect((toolResult as any).content).toContain("Denied by hook");
 });
 
@@ -305,7 +308,7 @@ test("PreToolUse hook modifies input → tool gets updated input", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     hooks,
   })) {
@@ -347,7 +350,7 @@ test("PostToolUse fires after successful execution", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     hooks,
   })) {
@@ -390,7 +393,7 @@ test("PostToolUseFailure fires on tool error", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     hooks,
   })) {
@@ -437,7 +440,7 @@ test("SessionStart and SessionEnd fire at loop boundaries", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     hooks,
   })) {
@@ -474,14 +477,17 @@ test("PostToolUse additionalContext appended to result", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     hooks,
   })) {
     messages.push(msg);
   }
 
-  const toolResult = messages.find((m) => m.type === "tool_result");
+  const toolResult = messages
+    .filter((m) => m.type === "user")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_result");
   expect(toolResult).toBeDefined();
   expect((toolResult as any).content).toContain("Echo: hello");
   expect((toolResult as any).content).toContain("[hook context added]");

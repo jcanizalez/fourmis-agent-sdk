@@ -29,6 +29,9 @@ export const HOOK_EVENTS = [
   "SubagentStop",
   "PreCompact",
   "PermissionRequest",
+  "Setup",
+  "TeammateIdle",
+  "TaskCompleted",
 ] as const;
 
 export type HookEvent = (typeof HOOK_EVENTS)[number];
@@ -38,6 +41,8 @@ export type HookEvent = (typeof HOOK_EVENTS)[number];
 export type HookInput = {
   /** The hook event type */
   event: HookEvent;
+  /** Claude-compatible hook event field name */
+  hook_event_name?: HookEvent;
   /** Tool name (for tool-related events) */
   tool_name?: string;
   /** Tool input (for PreToolUse) */
@@ -48,6 +53,9 @@ export type HookInput = {
   tool_error?: boolean;
   /** Session ID */
   session_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  permission_mode?: string;
   /** Agent/subagent type (for SubagentStart/SubagentStop) */
   agent_type?: string;
   /** Stop reason (for Stop) */
@@ -59,6 +67,17 @@ export type HookInput = {
 };
 
 export type SyncHookJSONOutput = {
+  /** Claude-compatible continuation field */
+  continue?: boolean;
+  /** Claude-compatible permission decision envelope */
+  decision?: {
+    behavior: "allow";
+    updatedInput?: Record<string, unknown>;
+    updatedPermissions?: import("./types.ts").PermissionUpdate[];
+  } | {
+    behavior: "deny";
+    message: string;
+  };
   /** For PreToolUse: override the permission decision */
   permissionDecision?: "allow" | "deny";
   /** For PreToolUse: replace the tool input */
@@ -82,6 +101,8 @@ export type HookCallbackMatcher = {
   matcher?: string;
   /** Callbacks to run when the matcher matches. */
   hooks: HookCallback[];
+  /** Timeout in seconds for all hooks in this matcher. */
+  timeout?: number;
 };
 
 // ─── Hook Manager ────────────────────────────────────────────────────────────
@@ -132,9 +153,39 @@ export class HookManager {
 
       // Run callbacks sequentially within a matcher
       for (const callback of entry.hooks) {
-        const result = await callback(input, toolUseId, { signal });
+        const timeoutMs = typeof entry.timeout === "number" && entry.timeout > 0
+          ? Math.floor(entry.timeout * 1000)
+          : null;
+
+        const invoke = callback(input, toolUseId, { signal });
+        const result = timeoutMs
+          ? await Promise.race([
+              invoke,
+              new Promise<SyncHookJSONOutput>((resolve) => {
+                setTimeout(() => resolve({}), timeoutMs);
+              }),
+            ])
+          : await invoke;
+
         if (result) {
           hasOutput = true;
+
+          if (result.continue === false && !result.permissionDecision) {
+            merged.permissionDecision = "deny";
+          }
+
+          if (result.decision) {
+            if (result.decision.behavior === "deny") {
+              merged.permissionDecision = "deny";
+            } else {
+              if (!merged.permissionDecision) {
+                merged.permissionDecision = "allow";
+              }
+              if (result.decision.updatedInput !== undefined) {
+                merged.updatedInput = result.decision.updatedInput;
+              }
+            }
+          }
 
           // permissionDecision: first "deny" wins
           if (result.permissionDecision) {

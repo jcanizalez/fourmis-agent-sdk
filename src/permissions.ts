@@ -19,10 +19,10 @@ import type {
 import type { SettingsManager } from "./settings.ts";
 
 // Tools that are always safe (read-only, no side effects)
-const SAFE_TOOLS = new Set(["Read", "Glob", "Grep"]);
+const SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "WebFetch", "WebSearch"]);
 
 // Tools that modify files but are reversible
-const EDIT_TOOLS = new Set(["Write", "Edit"]);
+const EDIT_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "TodoWrite", "Config"]);
 
 // Filesystem Bash commands auto-approved in acceptEdits mode
 const FS_COMMANDS = ["mkdir", "touch", "rm", "mv", "cp"];
@@ -149,7 +149,11 @@ export class PermissionManager {
 
     // Custom permission callback
     if (this.canUseTool) {
-      const result = await this.canUseTool(toolName, input, options);
+      const result = await this.canUseTool(toolName, input, {
+        ...options,
+        toolUseID: options.toolUseId,
+        agentID: options.agentId,
+      });
 
       // Apply updatedPermissions if provided
       if (result.behavior === "allow" && result.updatedPermissions) {

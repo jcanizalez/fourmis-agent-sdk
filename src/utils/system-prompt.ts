@@ -68,6 +68,8 @@ const TOOL_SPECIFIC_GUIDELINES: Record<string, string> = {
 export type SystemPromptContext = {
   tools: string[];
   cwd?: string;
+  additionalDirectories?: string[];
+  loadProjectInstructions?: boolean;
   permissionMode?: string;
   customPrompt?: string;
   skills?: Skill[];
@@ -90,10 +92,18 @@ export function buildSystemPrompt(context: SystemPromptContext): string {
   if (context.cwd) {
     sections.push(`# Environment\n\nWorking directory: ${context.cwd}`);
 
-    // Auto-load CLAUDE.md or AGENTS.md from working directory
-    const instructions = readProjectInstructions(context.cwd);
-    if (instructions) {
-      sections.push(`# Project Instructions\n\n${instructions}`);
+    if (context.additionalDirectories && context.additionalDirectories.length > 0) {
+      sections.push(
+        `Additional allowed directories:\n${context.additionalDirectories.map((d) => `- ${d}`).join("\n")}`,
+      );
+    }
+
+    // Claude SDK behavior: project instructions are loaded only when project settings are enabled.
+    if (context.loadProjectInstructions) {
+      const instructions = readProjectInstructions(context.cwd);
+      if (instructions) {
+        sections.push(`# Project Instructions\n\n${instructions}`);
+      }
     }
   }
 

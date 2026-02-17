@@ -85,7 +85,7 @@ test("agent loop with MCP server: tool call flows end-to-end", async () => {
     sessionId: "test",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
     mcpClient,
   })) {
@@ -93,20 +93,23 @@ test("agent loop with MCP server: tool call flows end-to-end", async () => {
   }
 
   // Init should show the MCP tools
-  const init = messages.find((m) => m.type === "init") as any;
+  const init = messages.find((m) => m.type === "system" && m.subtype === "init") as any;
   expect(init.tools).toContain("mcp__calc__add");
   // Resource tools should also be registered
   expect(init.tools).toContain("mcp__list_resources");
   expect(init.tools).toContain("mcp__read_resource");
 
   // Tool call should succeed
-  const toolResult = messages.find((m) => m.type === "tool_result") as any;
+  const toolResult = messages
+    .filter((m) => m.type === "user")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_result") as any;
   expect(toolResult).toBeDefined();
   expect(toolResult.content).toBe("8");
-  expect(toolResult.isError).toBeFalsy();
+  expect(toolResult.is_error).toBeFalsy();
 
   // Final result
   const result = messages.find((m) => m.type === "result" && m.subtype === "success") as any;
   expect(result).toBeDefined();
-  expect(result.text).toBe("The result is 8");
+  expect(result.result).toBe("The result is 8");
 });

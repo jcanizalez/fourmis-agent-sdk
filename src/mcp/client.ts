@@ -11,6 +11,7 @@ import type {
   McpToolInfo,
   McpResourceInfo,
 } from "./types.ts";
+import type { McpSetServersResult } from "../types.ts";
 
 type ConnectedServer = {
   name: string;
@@ -22,9 +23,10 @@ type ConnectedServer = {
 export class McpClientManager {
   private configs: Record<string, McpServerConfig>;
   private servers = new Map<string, ConnectedServer>();
+  private disabled = new Set<string>();
 
   constructor(configs: Record<string, McpServerConfig>) {
-    this.configs = configs;
+    this.configs = { ...configs };
   }
 
   async connectAll(): Promise<void> {
@@ -33,6 +35,21 @@ export class McpClientManager {
   }
 
   private async connectOne(name: string, config: McpServerConfig): Promise<void> {
+    if (this.disabled.has(name)) {
+      this.servers.set(name, {
+        name,
+        client: null!,
+        tools: [],
+        status: {
+          name,
+          status: "disabled",
+          config: this.toStatusConfig(config),
+          scope: config.type === "sdk" ? "sdk" : "session",
+        },
+      });
+      return;
+    }
+
     try {
       const client = new Client({ name: `fourmis-${name}`, version: "1.0.0" });
 
@@ -76,13 +93,27 @@ export class McpClientManager {
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema as Record<string, unknown> | undefined,
+        annotations: t.annotations
+          ? {
+              readOnly: t.annotations.readOnly,
+              destructive: t.annotations.destructive,
+              openWorld: t.annotations.openWorld,
+            }
+          : undefined,
       }));
 
       this.servers.set(name, {
         name,
         client,
         tools,
-        status: { name, status: "connected", tools },
+        status: {
+          name,
+          status: "connected",
+          tools,
+          serverInfo: { name, version: "1.0.0" },
+          config: this.toStatusConfig(config),
+          scope: config.type === "sdk" ? "sdk" : "session",
+        },
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
@@ -90,9 +121,22 @@ export class McpClientManager {
         name,
         client: null!,
         tools: [],
-        status: { name, status: "failed", error },
+        status: {
+          name,
+          status: "failed",
+          error,
+          config: this.toStatusConfig(config),
+          scope: config.type === "sdk" ? "sdk" : "session",
+        },
       });
     }
+  }
+
+  private toStatusConfig(config: McpServerConfig): McpServerStatus["config"] {
+    if (config.type === "sdk") {
+      return { type: "sdk", name: config.name };
+    }
+    return config as McpServerStatus["config"];
   }
 
   /**
@@ -193,26 +237,118 @@ export class McpClientManager {
   status(): McpServerStatus[] {
     // Include pending for configs not yet connected
     const result: McpServerStatus[] = [];
-    for (const [name] of Object.entries(this.configs)) {
+    for (const [name, config] of Object.entries(this.configs)) {
       const server = this.servers.get(name);
       if (server) {
         result.push(server.status);
+      } else if (this.disabled.has(name)) {
+        result.push({
+          name,
+          status: "disabled",
+          config: this.toStatusConfig(config),
+          scope: config.type === "sdk" ? "sdk" : "session",
+        });
       } else {
-        result.push({ name, status: "pending" });
+        result.push({
+          name,
+          status: "pending",
+          config: this.toStatusConfig(config),
+          scope: config.type === "sdk" ? "sdk" : "session",
+        });
       }
     }
     return result;
   }
 
-  async closeAll(): Promise<void> {
-    for (const [, server] of this.servers) {
-      if (server.client) {
-        try {
-          await server.client.close();
-        } catch {
-          // Ignore close errors
-        }
+  async reconnectServer(serverName: string): Promise<void> {
+    const config = this.configs[serverName];
+    if (!config) {
+      throw new Error(`MCP server "${serverName}" is not configured`);
+    }
+    await this.closeOne(serverName);
+    await this.connectOne(serverName, config);
+    const status = this.servers.get(serverName)?.status;
+    if (!status || status.status !== "connected") {
+      throw new Error(status?.error ?? `Failed to reconnect MCP server "${serverName}"`);
+    }
+  }
+
+  async toggleServer(serverName: string, enabled: boolean): Promise<void> {
+    const config = this.configs[serverName];
+    if (!config) {
+      throw new Error(`MCP server "${serverName}" is not configured`);
+    }
+
+    if (!enabled) {
+      this.disabled.add(serverName);
+      await this.closeOne(serverName);
+      this.servers.set(serverName, {
+        name: serverName,
+        client: null!,
+        tools: [],
+        status: {
+          name: serverName,
+          status: "disabled",
+          config: this.toStatusConfig(config),
+          scope: config.type === "sdk" ? "sdk" : "session",
+        },
+      });
+      return;
+    }
+
+    this.disabled.delete(serverName);
+    await this.reconnectServer(serverName);
+  }
+
+  async setServers(servers: Record<string, McpServerConfig>): Promise<McpSetServersResult> {
+    const prevNames = new Set(Object.keys(this.configs));
+    const nextNames = new Set(Object.keys(servers));
+
+    const added = [...nextNames].filter((n) => !prevNames.has(n));
+    const removed = [...prevNames].filter((n) => !nextNames.has(n));
+    const errors: Record<string, string> = {};
+
+    for (const name of removed) {
+      await this.closeOne(name);
+      delete this.configs[name];
+      this.disabled.delete(name);
+      this.servers.delete(name);
+    }
+
+    for (const [name, config] of Object.entries(servers)) {
+      const prev = this.configs[name];
+      this.configs[name] = config;
+
+      if (this.disabled.has(name)) continue;
+
+      if (!prev || JSON.stringify(this.toStatusConfig(prev)) !== JSON.stringify(this.toStatusConfig(config))) {
+        await this.closeOne(name);
+        await this.connectOne(name, config);
       }
+
+      const status = this.servers.get(name)?.status;
+      if (!status || status.status === "failed") {
+        errors[name] = status?.error ?? "Failed to connect";
+      }
+    }
+
+    return { added, removed, errors };
+  }
+
+  private async closeOne(serverName: string): Promise<void> {
+    const existing = this.servers.get(serverName);
+    if (existing?.client) {
+      try {
+        await existing.client.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  async closeAll(): Promise<void> {
+    for (const [name] of this.servers) {
+      await this.closeOne(name);
     }
     this.servers.clear();
   }

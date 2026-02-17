@@ -100,22 +100,22 @@ test("simple text response (no tools)", async () => {
     sessionId: "test-session",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
   }
 
-  const initMsg = messages.find((m) => m.type === "init");
+  const initMsg = messages.find((m) => m.type === "system" && m.subtype === "init");
   expect(initMsg).toBeDefined();
 
-  const textMsg = messages.find((m) => m.type === "text");
-  expect(textMsg).toBeDefined();
-  expect((textMsg as any).text).toBe("Hello! I can help you.");
+  const assistantMsg = messages.find((m) => m.type === "assistant");
+  expect(assistantMsg).toBeDefined();
+  expect((assistantMsg as any).message.content).toContainEqual({ type: "text", text: "Hello! I can help you." });
 
   const resultMsg = messages.find((m) => m.type === "result" && m.subtype === "success");
   expect(resultMsg).toBeDefined();
-  expect((resultMsg as any).turns).toBe(1);
+  expect((resultMsg as any).num_turns).toBe(1);
 });
 
 test("tool call and response", async () => {
@@ -144,24 +144,30 @@ test("tool call and response", async () => {
     sessionId: "test-session",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
   }
 
-  // Should have: init, text, tool_use, tool_result, text, result
-  const toolUse = messages.find((m) => m.type === "tool_use");
+  // Should have assistant tool_use blocks and user tool_result blocks
+  const toolUse = messages
+    .filter((m) => m.type === "assistant")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_use");
   expect(toolUse).toBeDefined();
   expect((toolUse as any).name).toBe("Echo");
 
-  const toolResult = messages.find((m) => m.type === "tool_result");
+  const toolResult = messages
+    .filter((m) => m.type === "user")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_result");
   expect(toolResult).toBeDefined();
   expect((toolResult as any).content).toBe("Echo: hello");
 
   const result = messages.find((m) => m.type === "result" && m.subtype === "success");
   expect(result).toBeDefined();
-  expect((result as any).turns).toBe(2);
+  expect((result as any).num_turns).toBe(2);
 });
 
 test("max turns limit", async () => {
@@ -187,7 +193,7 @@ test("max turns limit", async () => {
     sessionId: "test-session",
     maxTurns: 2,
     maxBudgetUsd: 100,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
@@ -221,15 +227,18 @@ test("permission denial", async () => {
     sessionId: "test-session",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
   }
 
-  const toolResult = messages.find((m) => m.type === "tool_result");
+  const toolResult = messages
+    .filter((m) => m.type === "user")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_result");
   expect(toolResult).toBeDefined();
-  expect((toolResult as any).isError).toBe(true);
+  expect((toolResult as any).is_error).toBe(true);
   expect((toolResult as any).content).toContain("Permission denied");
 });
 
@@ -252,15 +261,15 @@ test("streaming events when enabled", async () => {
     sessionId: "test-session",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: true,
+    includePartialMessages: true,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
   }
 
-  const streamMsg = messages.find((m) => m.type === "stream");
+  const streamMsg = messages.find((m) => m.type === "stream_event");
   expect(streamMsg).toBeDefined();
-  expect((streamMsg as any).subtype).toBe("text_delta");
+  expect((streamMsg as any).event.type).toBe("text_delta");
 });
 
 test("cost tracking", async () => {
@@ -282,7 +291,7 @@ test("cost tracking", async () => {
     sessionId: "test-session",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
@@ -290,7 +299,7 @@ test("cost tracking", async () => {
 
   const result = messages.find((m) => m.type === "result" && m.subtype === "success") as any;
   expect(result).toBeDefined();
-  expect(result.costUsd).toBeGreaterThan(0);
+  expect(result.total_cost_usd).toBeGreaterThan(0);
   expect(result.usage.inputTokens).toBeGreaterThan(0);
-  expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  expect(result.duration_ms).toBeGreaterThanOrEqual(0);
 });

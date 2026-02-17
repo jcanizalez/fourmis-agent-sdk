@@ -28,15 +28,41 @@ export const BashTool: ToolImplementation = {
         type: "number",
         description: "Timeout in milliseconds (max 600000)",
       },
+      run_in_background: {
+        type: "boolean",
+        description: "Run command asynchronously and return immediately.",
+      },
+      dangerouslyDisableSandbox: {
+        type: "boolean",
+        description: "If true, explicitly request unsandboxed execution.",
+      },
+      _simulatedSedEdit: {
+        type: "object",
+        properties: {
+          filePath: { type: "string" },
+          newContent: { type: "string" },
+        },
+        description: "Internal field for precomputed edit previews.",
+      },
     },
     required: ["command"],
   },
 
   async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
-    const { command, timeout: timeoutMs, description } = input as {
+    const {
+      command,
+      timeout: timeoutMs,
+      run_in_background,
+      description,
+      dangerouslyDisableSandbox,
+      _simulatedSedEdit,
+    } = input as {
       command: string;
       timeout?: number;
+      run_in_background?: boolean;
       description?: string;
+      dangerouslyDisableSandbox?: boolean;
+      _simulatedSedEdit?: { filePath: string; newContent: string };
     };
 
     if (!command || typeof command !== "string") {
@@ -46,6 +72,25 @@ export const BashTool: ToolImplementation = {
     const timeout = Math.min(timeoutMs ?? DEFAULT_TIMEOUT, MAX_TIMEOUT);
 
     try {
+      if (run_in_background) {
+        const proc = Bun.spawn(["bash", "-c", command], {
+          cwd: ctx.cwd,
+          stdout: "ignore",
+          stderr: "ignore",
+          stdin: "ignore",
+          env: { ...process.env, ...ctx.env },
+        });
+        return {
+          content: `Background command started (pid ${proc.pid ?? "unknown"}).`,
+          metadata: {
+            pid: proc.pid ?? null,
+            run_in_background: true,
+            dangerouslyDisableSandbox: dangerouslyDisableSandbox === true,
+            hasSimulatedSedEdit: !!_simulatedSedEdit,
+          },
+        };
+      }
+
       const proc = Bun.spawn(["bash", "-c", command], {
         cwd: ctx.cwd,
         stdout: "pipe",
@@ -84,7 +129,11 @@ export const BashTool: ToolImplementation = {
       return {
         content: output,
         isError: exitCode !== 0 ? true : undefined,
-        metadata: { exitCode },
+        metadata: {
+          exitCode,
+          dangerouslyDisableSandbox: dangerouslyDisableSandbox === true,
+          hasSimulatedSedEdit: !!_simulatedSedEdit,
+        },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

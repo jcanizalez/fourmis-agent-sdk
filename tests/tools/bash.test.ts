@@ -26,7 +26,8 @@ test("reports exit code on failure", async () => {
 
 test("respects working directory", async () => {
   const result = await BashTool.execute({ command: "pwd" }, { ...ctx, cwd: "/tmp" });
-  expect(result.content.trim()).toBe("/tmp");
+  const pwd = result.content.trim();
+  expect(pwd === "/tmp" || pwd === "/private/tmp").toBe(true);
 });
 
 test("truncates long output", async () => {

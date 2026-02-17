@@ -3,7 +3,7 @@
  *
  * AsyncGenerator that orchestrates:
  *   1. Call LLM via provider adapter
- *   2. Stream text deltas as AgentMessage events
+ *   2. Stream partial assistant deltas (optional)
  *   3. Collect tool calls
  *   4. Execute tools with permission checks
  *   5. Feed results back to LLM
@@ -14,9 +14,18 @@ import type {
   AgentMessage,
   TokenUsage,
   ModelUsage,
+  SDKPermissionDenial,
+  ContentBlock,
+  ToolResultContent,
+  OutputFormat,
+  ThinkingConfig,
+  Effort,
+  PermissionMode,
+  SdkBeta,
+  SdkPluginConfig,
 } from "./types.ts";
 import { uuid, emptyTokenUsage, mergeUsage } from "./types.ts";
-import type { ProviderAdapter, NormalizedMessage, NormalizedContent, ChatChunk } from "./providers/types.ts";
+import type { ProviderAdapter, NormalizedMessage, NormalizedContent } from "./providers/types.ts";
 import type { ToolRegistry, ToolContext } from "./tools/registry.ts";
 import type { PermissionManager } from "./permissions.ts";
 import type { HookManager } from "./hooks.ts";
@@ -33,6 +42,12 @@ export type SessionLogger = (
 export type AgentLoopOptions = {
   provider: ProviderAdapter;
   model: string;
+  fallbackModel?: string;
+  modelState?: { current: string };
+  maxThinkingTokensState?: { current: number | undefined };
+  thinking?: ThinkingConfig;
+  effort?: Effort;
+  outputFormat?: OutputFormat;
   systemPrompt: string;
   tools: ToolRegistry;
   permissions: PermissionManager;
@@ -40,7 +55,7 @@ export type AgentLoopOptions = {
   sessionId: string;
   maxTurns: number;
   maxBudgetUsd: number;
-  includeStreamEvents: boolean;
+  includePartialMessages: boolean;
   signal: AbortSignal;
   env?: Record<string, string>;
   debug?: boolean;
@@ -50,7 +65,76 @@ export type AgentLoopOptions = {
   sessionLogger?: SessionLogger;
   /** Native memory tool for Anthropic provider (handled specially) */
   nativeMemoryTool?: NativeMemoryTool;
+  initMeta?: {
+    agents?: string[];
+    betas?: SdkBeta[];
+    slashCommands?: string[];
+    outputStyle?: string;
+    skills?: string[];
+    plugins?: SdkPluginConfig[];
+  };
 };
+
+function makeModelUsageEntry(): ModelUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalCostUsd: 0,
+  };
+}
+
+function makeErrorResult(params: {
+  subtype:
+    | "error_during_execution"
+    | "error_max_turns"
+    | "error_max_budget_usd"
+    | "error_max_structured_output_retries";
+  errors: string[];
+  turns: number;
+  costUsd: number;
+  sessionId: string;
+  startTime: number;
+  apiTimeMs: number;
+  usage: TokenUsage;
+  modelUsage: Record<string, ModelUsage>;
+  permissionDenials: SDKPermissionDenial[];
+}): AgentMessage {
+  return {
+    type: "result",
+    subtype: params.subtype,
+    duration_ms: Date.now() - params.startTime,
+    duration_api_ms: params.apiTimeMs,
+    is_error: true,
+    num_turns: params.turns,
+    stop_reason: null,
+    total_cost_usd: params.costUsd,
+    usage: params.usage,
+    modelUsage: params.modelUsage,
+    permission_denials: params.permissionDenials,
+    errors: params.errors,
+    uuid: uuid(),
+    session_id: params.sessionId,
+  };
+}
+
+function extractStructuredJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { ok: false, error: "Empty result text; expected JSON output." };
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+
+  try {
+    return { ok: true, value: JSON.parse(candidate) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `Invalid JSON output: ${message}` };
+  }
+}
 
 export async function* agentLoop(
   prompt: string,
@@ -59,6 +143,12 @@ export async function* agentLoop(
   const {
     provider,
     model,
+    fallbackModel,
+    modelState,
+    maxThinkingTokensState,
+    thinking,
+    effort,
+    outputFormat,
     systemPrompt,
     tools,
     permissions,
@@ -66,7 +156,7 @@ export async function* agentLoop(
     sessionId,
     maxTurns,
     maxBudgetUsd,
-    includeStreamEvents,
+    includePartialMessages,
     signal,
     env,
     debug,
@@ -75,7 +165,10 @@ export async function* agentLoop(
     previousMessages,
     sessionLogger,
     nativeMemoryTool,
+    initMeta,
   } = options;
+
+  const effectiveModelState = modelState ?? { current: model };
 
   const startTime = Date.now();
   let apiTimeMs = 0;
@@ -83,6 +176,7 @@ export async function* agentLoop(
   let totalUsage = emptyTokenUsage();
   let costUsd = 0;
   const modelUsage: Record<string, ModelUsage> = {};
+  const permissionDenials: SDKPermissionDenial[] = [];
 
   // Connect MCP servers and register their tools
   if (mcpClient) {
@@ -107,48 +201,114 @@ export async function* agentLoop(
     sessionLogger("user", prompt, null);
   }
 
-  // Yield init event
+  // Yield Claude-compatible init event
   yield {
-    type: "init",
-    sessionId,
-    model,
-    provider: provider.name,
+    type: "system",
+    subtype: "init",
+    apiKeySource: "user",
+    claude_code_version: "fourmis-agent-sdk",
+    session_id: sessionId,
+    model: effectiveModelState.current,
     tools: tools.list(),
     cwd,
+    mcp_servers: (mcpClient?.status() ?? []).map((s) => ({ name: s.name, status: s.status })),
+    permissionMode: permissions.getMode(),
+    agents: initMeta?.agents,
+    betas: initMeta?.betas,
+    slash_commands: initMeta?.slashCommands ?? [],
+    output_style: initMeta?.outputStyle ?? "default",
+    skills: initMeta?.skills ?? [],
+    plugins: (initMeta?.plugins ?? []).map((p) => ({ name: p.path.split("/").pop() ?? p.path, path: p.path })),
     uuid: uuid(),
   };
 
+  // Fire Setup hook
+  if (hooks) {
+    await hooks.fire("Setup", {
+      event: "Setup",
+      hook_event_name: "Setup",
+      trigger: "init",
+      session_id: sessionId,
+      cwd,
+      permission_mode: permissions.getMode(),
+    }, undefined, { signal });
+  }
+
   // Fire SessionStart hook
   if (hooks) {
-    await hooks.fire("SessionStart", { event: "SessionStart", session_id: sessionId }, undefined, { signal });
+    await hooks.fire("SessionStart", {
+      event: "SessionStart",
+      hook_event_name: "SessionStart",
+      session_id: sessionId,
+      source: "startup",
+      model: effectiveModelState.current,
+      cwd,
+      permission_mode: permissions.getMode(),
+    }, undefined, { signal });
   }
 
   while (true) {
     // Check abort signal
     if (signal.aborted) {
-      yield makeError("error_execution", ["Aborted"], turns, costUsd, sessionId, startTime);
+      yield makeErrorResult({
+        subtype: "error_during_execution",
+        errors: ["Aborted"],
+        turns,
+        costUsd,
+        sessionId,
+        startTime,
+        apiTimeMs,
+        usage: totalUsage,
+        modelUsage,
+        permissionDenials,
+      });
       return;
     }
 
     // Check turn limit
     if (turns >= maxTurns) {
-      yield makeError("error_max_turns", [`Reached maximum turns (${maxTurns})`], turns, costUsd, sessionId, startTime);
+      yield makeErrorResult({
+        subtype: "error_max_turns",
+        errors: [`Reached maximum turns (${maxTurns})`],
+        turns,
+        costUsd,
+        sessionId,
+        startTime,
+        apiTimeMs,
+        usage: totalUsage,
+        modelUsage,
+        permissionDenials,
+      });
       return;
     }
 
     // Check budget limit
     if (maxBudgetUsd > 0 && costUsd >= maxBudgetUsd) {
-      yield makeError("error_max_budget", [`Reached budget limit ($${maxBudgetUsd})`], turns, costUsd, sessionId, startTime);
+      yield makeErrorResult({
+        subtype: "error_max_budget_usd",
+        // Anthropic SDK reports budget exhaustion via subtype only.
+        errors: [],
+        turns,
+        costUsd,
+        sessionId,
+        startTime,
+        apiTimeMs,
+        usage: totalUsage,
+        modelUsage,
+        permissionDenials,
+      });
       return;
     }
 
     // Call LLM
+    const activeModel = effectiveModelState.current;
     const toolDefs = tools.getDefinitions();
     const apiStart = Date.now();
 
     let assistantTextParts: string[] = [];
-    let toolCalls: { id: string; name: string; input: unknown }[] = [];
+    const toolCalls: { id: string; name: string; input: unknown }[] = [];
     let turnUsage = emptyTokenUsage();
+    let turnStopReason: string | null = null;
 
     // Build native tools array for the provider (e.g. Anthropic memory tool)
     const nativeTools: unknown[] | undefined = nativeMemoryTool
@@ -157,26 +317,42 @@ export async function* agentLoop(
 
     try {
       const chunks = provider.chat({
-        model,
+        model: activeModel,
         messages,
         tools: toolDefs.length > 0 ? toolDefs : undefined,
         systemPrompt,
         signal,
         nativeTools,
+        thinkingBudget: maxThinkingTokensState?.current,
+        thinking,
+        effort,
+        outputFormat,
       });
 
       for await (const chunk of chunks) {
         switch (chunk.type) {
           case "text_delta":
             assistantTextParts.push(chunk.text);
-            if (includeStreamEvents) {
-              yield { type: "stream", subtype: "text_delta", text: chunk.text, uuid: uuid() };
+            if (includePartialMessages) {
+              yield {
+                type: "stream_event",
+                event: { type: "text_delta", text: chunk.text },
+                parent_tool_use_id: null,
+                uuid: uuid(),
+                session_id: sessionId,
+              };
             }
             break;
 
           case "thinking_delta":
-            if (includeStreamEvents) {
-              yield { type: "stream", subtype: "thinking_delta", text: chunk.text, uuid: uuid() };
+            if (includePartialMessages) {
+              yield {
+                type: "stream_event",
+                event: { type: "thinking_delta", thinking: chunk.text },
+                parent_tool_use_id: null,
+                uuid: uuid(),
+                session_id: sessionId,
+              };
             }
             break;
 
@@ -189,13 +365,38 @@ export async function* agentLoop(
             break;
 
           case "done":
-            // Streaming complete
+            turnStopReason = chunk.stopReason ?? null;
             break;
         }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      yield makeError("error_execution", [`API error: ${message}`], turns, costUsd, sessionId, startTime);
+
+      if (fallbackModel && activeModel !== fallbackModel) {
+        effectiveModelState.current = fallbackModel;
+        yield {
+          type: "system",
+          subtype: "status",
+          status: null,
+          permissionMode: permissions.getMode(),
+          uuid: uuid(),
+          session_id: sessionId,
+        };
+        continue;
+      }
+
+      yield makeErrorResult({
+        subtype: "error_during_execution",
+        errors: [`API error: ${message}`],
+        turns,
+        costUsd,
+        sessionId,
+        startTime,
+        apiTimeMs,
+        usage: totalUsage,
+        modelUsage,
+        permissionDenials,
+      });
       return;
     }
 
@@ -204,29 +405,26 @@ export async function* agentLoop(
 
     // Update usage tracking
     totalUsage = mergeUsage(totalUsage, turnUsage);
-    const turnCost = provider.calculateCost(model, turnUsage);
+    const turnCost = provider.calculateCost(activeModel, turnUsage);
     costUsd += turnCost;
 
     // Update per-model usage
-    if (!modelUsage[model]) {
-      modelUsage[model] = {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-        totalCostUsd: 0,
-      };
+    if (!modelUsage[activeModel]) {
+      modelUsage[activeModel] = makeModelUsageEntry();
     }
-    modelUsage[model].inputTokens += turnUsage.inputTokens;
-    modelUsage[model].outputTokens += turnUsage.outputTokens;
-    modelUsage[model].cacheReadInputTokens += turnUsage.cacheReadInputTokens;
-    modelUsage[model].cacheCreationInputTokens += turnUsage.cacheCreationInputTokens;
-    modelUsage[model].totalCostUsd += turnCost;
+    modelUsage[activeModel].inputTokens += turnUsage.inputTokens;
+    modelUsage[activeModel].outputTokens += turnUsage.outputTokens;
+    modelUsage[activeModel].cacheReadInputTokens += turnUsage.cacheReadInputTokens;
+    modelUsage[activeModel].cacheCreationInputTokens += turnUsage.cacheCreationInputTokens;
+    modelUsage[activeModel].totalCostUsd += turnCost;
+    modelUsage[activeModel].webSearchRequests = (modelUsage[activeModel].webSearchRequests ?? 0) + (turnUsage.webSearchRequests ?? 0);
+    modelUsage[activeModel].costUSD = modelUsage[activeModel].totalCostUsd;
+    modelUsage[activeModel].contextWindow = provider.getContextWindow(activeModel);
 
     const assistantText = assistantTextParts.join("");
 
     // Build assistant message for conversation history
-    const assistantContent: NormalizedContent[] = [];
+    const assistantContent: ContentBlock[] = [];
     if (assistantText) {
       assistantContent.push({ type: "text", text: assistantText });
     }
@@ -245,40 +443,85 @@ export async function* agentLoop(
       sessionLogger("assistant", assistantContent, null);
     }
 
-    // Yield text message if there's text
-    if (assistantText) {
-      yield { type: "text", text: assistantText, uuid: uuid() };
-    }
+    // Emit Claude-compatible assistant envelope
+    yield {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: assistantContent,
+      },
+      parent_tool_use_id: null,
+      uuid: uuid(),
+      session_id: sessionId,
+    };
 
-    // If no tool calls → we're done
+    // If no tool calls -> we're done
     if (toolCalls.length === 0) {
+      let structuredOutput: unknown | undefined;
+      if (outputFormat?.type === "json_schema") {
+        const parsed = extractStructuredJson(assistantText);
+        if (!parsed.ok) {
+          yield makeErrorResult({
+            subtype: "error_max_structured_output_retries",
+            errors: [parsed.error],
+            turns,
+            costUsd,
+            sessionId,
+            startTime,
+            apiTimeMs,
+            usage: totalUsage,
+            modelUsage,
+            permissionDenials,
+          });
+          return;
+        }
+        structuredOutput = parsed.value;
+      }
+
       // Fire Stop hook
       if (hooks) {
-        await hooks.fire("Stop", { event: "Stop", session_id: sessionId, text: assistantText || undefined }, undefined, { signal });
+        await hooks.fire("Stop", {
+          event: "Stop",
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          text: assistantText || undefined,
+          stop_reason: turnStopReason ?? undefined,
+        }, undefined, {
+          signal,
+        });
       }
       // Fire SessionEnd hook
       if (hooks) {
-        await hooks.fire("SessionEnd", { event: "SessionEnd", session_id: sessionId }, undefined, { signal });
+        await hooks.fire("SessionEnd", {
+          event: "SessionEnd",
+          hook_event_name: "SessionEnd",
+          session_id: sessionId,
+          reason: "other",
+        }, undefined, { signal });
       }
 
       yield {
         type: "result",
         subtype: "success",
-        text: assistantText || null,
-        turns,
-        costUsd,
-        durationMs: Date.now() - startTime,
-        durationApiMs: apiTimeMs,
-        sessionId,
+        duration_ms: Date.now() - startTime,
+        duration_api_ms: apiTimeMs,
+        is_error: false,
+        num_turns: turns,
+        result: assistantText,
+        stop_reason: turnStopReason,
+        total_cost_usd: costUsd,
         usage: totalUsage,
         modelUsage,
+        permission_denials: permissionDenials,
+        structured_output: structuredOutput,
         uuid: uuid(),
+        session_id: sessionId,
       };
       return;
     }
 
     // Execute tool calls
-    const toolResults: NormalizedContent[] = [];
+    const toolResults: ToolResultContent[] = [];
 
     for (const call of toolCalls) {
       // Fire PreToolUse hook
@@ -287,7 +530,13 @@ export async function* agentLoop(
       if (hooks) {
         const hookResult = await hooks.fire(
           "PreToolUse",
-          { event: "PreToolUse", tool_name: call.name, tool_input: call.input, session_id: sessionId },
+          {
+            event: "PreToolUse",
+            hook_event_name: "PreToolUse",
+            tool_name: call.name,
+            tool_input: call.input,
+            session_id: sessionId,
+          },
           call.id,
           { signal },
         );
@@ -301,17 +550,9 @@ export async function* agentLoop(
         }
       }
 
-      // If hook denied, skip to PostToolUseFailure
+      // If hook denied, skip execution and emit a tool_result block
       if (hookDenied) {
         const denyContent = "Denied by hook";
-        yield {
-          type: "tool_result",
-          id: call.id,
-          name: call.name,
-          content: denyContent,
-          isError: true,
-          uuid: uuid(),
-        };
         toolResults.push({
           type: "tool_result",
           tool_use_id: call.id,
@@ -341,21 +582,19 @@ export async function* agentLoop(
 
       if (permResult.behavior === "deny") {
         const denyContent = `Permission denied: ${permResult.message}`;
-        yield {
-          type: "tool_result",
-          id: call.id,
-          name: call.name,
-          content: denyContent,
-          isError: true,
-          uuid: uuid(),
-        };
+        permissionDenials.push({
+          tool_name: call.name,
+          tool_use_id: call.id,
+          tool_input: (inputAfterHook ?? {}) as Record<string, unknown>,
+        });
+
         toolResults.push({
           type: "tool_result",
           tool_use_id: call.id,
           content: denyContent,
           is_error: true,
         });
-        // Fire PostToolUseFailure for permission denial
+
         if (hooks) {
           await hooks.fire(
             "PostToolUseFailure",
@@ -371,15 +610,6 @@ export async function* agentLoop(
       const toolInput = permResult.behavior === "allow" && permResult.updatedInput
         ? permResult.updatedInput
         : inputAfterHook;
-
-      // Yield tool_use event
-      yield {
-        type: "tool_use",
-        id: call.id,
-        name: call.name,
-        input: toolInput,
-        uuid: uuid(),
-      };
 
       // Execute tool — route memory tool calls to the native handler if available
       let result: { content: string; isError?: boolean };
@@ -404,6 +634,10 @@ export async function* agentLoop(
         result = await tools.execute(call.name, toolInput, toolCtx);
       }
 
+      if (call.name === "ExitPlanMode") {
+        permissions.setMode("default" as PermissionMode);
+      }
+
       if (debug) {
         console.error(`[debug] Tool ${call.name}: ${result.isError ? "ERROR" : "OK"} (${result.content.length} chars)`);
       }
@@ -413,14 +647,27 @@ export async function* agentLoop(
         if (result.isError) {
           await hooks.fire(
             "PostToolUseFailure",
-            { event: "PostToolUseFailure", tool_name: call.name, tool_result: result.content, tool_error: true, session_id: sessionId },
+            {
+              event: "PostToolUseFailure",
+              hook_event_name: "PostToolUseFailure",
+              tool_name: call.name,
+              tool_result: result.content,
+              tool_error: true,
+              session_id: sessionId,
+            },
             call.id,
             { signal },
           );
         } else {
           const postResult = await hooks.fire(
             "PostToolUse",
-            { event: "PostToolUse", tool_name: call.name, tool_result: result.content, session_id: sessionId },
+            {
+              event: "PostToolUse",
+              hook_event_name: "PostToolUse",
+              tool_name: call.name,
+              tool_result: result.content,
+              session_id: sessionId,
+            },
             call.id,
             { signal },
           );
@@ -430,16 +677,6 @@ export async function* agentLoop(
           }
         }
       }
-
-      // Yield tool_result event
-      yield {
-        type: "tool_result",
-        id: call.id,
-        name: call.name,
-        content: result.content,
-        isError: result.isError,
-        uuid: uuid(),
-      };
 
       toolResults.push({
         type: "tool_result",
@@ -456,25 +693,18 @@ export async function* agentLoop(
     if (sessionLogger) {
       sessionLogger("user", toolResults, null);
     }
-  }
-}
 
-function makeError(
-  subtype: "error_execution" | "error_max_turns" | "error_max_budget",
-  errors: string[],
-  turns: number,
-  costUsd: number,
-  sessionId: string,
-  startTime: number,
-): AgentMessage {
-  return {
-    type: "result",
-    subtype,
-    errors,
-    turns,
-    costUsd,
-    durationMs: Date.now() - startTime,
-    sessionId,
-    uuid: uuid(),
-  };
+    // Emit Claude-compatible user envelope containing tool_result blocks.
+    yield {
+      type: "user",
+      message: {
+        role: "user",
+        content: toolResults,
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      uuid: uuid(),
+      session_id: sessionId,
+    };
+  }
 }

@@ -35,6 +35,18 @@ export class ToolRegistry {
     this.tools.set(tool.name, tool);
   }
 
+  unregister(name: string): void {
+    this.tools.delete(name);
+  }
+
+  clearByPrefix(prefix: string): void {
+    for (const name of this.tools.keys()) {
+      if (name.startsWith(prefix)) {
+        this.tools.delete(name);
+      }
+    }
+  }
+
   get(name: string): ToolImplementation | undefined {
     return this.tools.get(name);
   }

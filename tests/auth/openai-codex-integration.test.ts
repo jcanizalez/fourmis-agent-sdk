@@ -18,10 +18,11 @@ test.skipIf(!canRun)("end-to-end: Codex OAuth reads file via Responses API", asy
       provider: "openai",
       model: "gpt-5.3-codex",
       cwd: "/root/dev/fourmis-agent-sdk",
-      tools: "coding",
+      tools: { type: "preset", preset: "claude_code" },
       maxTurns: 5,
       maxBudgetUsd: 0.10,
       permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
     },
   });
 
@@ -30,15 +31,23 @@ test.skipIf(!canRun)("end-to-end: Codex OAuth reads file via Responses API", asy
     messages.push(msg);
   }
 
-  expect(messages.some((m) => m.type === "init")).toBe(true);
+  expect(messages.some((m) => m.type === "system" && m.subtype === "init")).toBe(true);
 
-  const toolUse = messages.find((m) => m.type === "tool_use") as any;
+  const toolUse = messages
+    .filter((m) => m.type === "assistant")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_use");
   expect(toolUse).toBeDefined();
-  expect(toolUse.name).toBe("Read");
+  expect((toolUse as any).name).toBe("Read");
 
   const result = messages.find((m) => m.type === "result" && m.subtype === "success") as any;
   expect(result).toBeDefined();
 
-  const textMsg = messages.filter((m) => m.type === "text").map((m: any) => m.text).join("");
+  const textMsg = messages
+    .filter((m) => m.type === "assistant")
+    .flatMap((m: any) => m.message.content)
+    .filter((c: any) => c.type === "text")
+    .map((c: any) => c.text)
+    .join("");
   expect(textMsg.toLowerCase()).toContain("fourmis");
 }, 30_000);

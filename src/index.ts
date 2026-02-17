@@ -9,16 +9,39 @@ export { query } from "./api.ts";
 // Types
 export type {
   AgentMessage,
-  InitMessage,
-  TextMessage,
-  ToolUseMessage,
-  ToolResultMessage,
-  StreamMessage,
-  ResultMessage,
-  ErrorMessage,
-  StatusMessage,
+  TextContent,
+  ToolUseContent,
+  ToolResultContent,
+  ContentBlock,
+  ApiKeySource,
+  SDKStatus,
+  SDKSystemMessage,
+  SDKStatusMessage,
+  SDKAssistantMessage,
+  SDKUserMessage,
+  SDKUserMessageReplay,
+  SDKStreamEvent,
+  SDKPartialAssistantMessage,
+  SDKToolProgressMessage,
+  SDKToolUseSummaryMessage,
+  SDKTaskNotificationMessage,
+  SDKAuthStatusMessage,
+  SDKCompactBoundaryMessage,
+  SDKHookStartedMessage,
+  SDKHookProgressMessage,
+  SDKHookResponseMessage,
+  SDKFilesPersistedEvent,
+  SDKPermissionDenial,
+  SDKResultSuccess,
+  SDKResultError,
+  SDKMessage,
   QueryOptions,
   Query,
+  SlashCommand,
+  AccountInfo,
+  RewindFilesResult,
+  McpSetServersResult,
+  QueryInitializationResult,
   TokenUsage,
   ModelUsage,
   PermissionMode,
@@ -61,6 +84,13 @@ export { WriteTool } from "./tools/write.ts";
 export { EditTool } from "./tools/edit.ts";
 export { GlobTool } from "./tools/glob.ts";
 export { GrepTool } from "./tools/grep.ts";
+export { NotebookEditTool } from "./tools/notebook-edit.ts";
+export { WebFetchTool } from "./tools/web-fetch.ts";
+export { WebSearchTool } from "./tools/web-search.ts";
+export { AskUserQuestionTool } from "./tools/ask-user-question.ts";
+export { TodoWriteTool } from "./tools/todo-write.ts";
+export { ConfigTool } from "./tools/config.ts";
+export { ExitPlanModeTool } from "./tools/exit-plan-mode.ts";
 
 // Hooks
 export { HookManager, HOOK_EVENTS } from "./hooks.ts";

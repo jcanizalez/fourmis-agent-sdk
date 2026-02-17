@@ -99,23 +99,29 @@ test("parent agent calls Task → subagent runs → result feeds back", async ()
     sessionId: "parent-session",
     maxTurns: 10,
     maxBudgetUsd: 1,
-    includeStreamEvents: false,
+    includePartialMessages: false,
     signal: new AbortController().signal,
   })) {
     messages.push(msg);
   }
 
   // Check that Task tool was called
-  const toolUse = messages.find((m) => m.type === "tool_use" && (m as any).name === "Task") as any;
+  const toolUse = messages
+    .filter((m) => m.type === "assistant")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_use" && c.name === "Task");
   expect(toolUse).toBeDefined();
 
   // Check that tool result contains subagent output
-  const toolResult = messages.find((m) => m.type === "tool_result" && (m as any).name === "Task") as any;
+  const toolResult = messages
+    .filter((m) => m.type === "user")
+    .flatMap((m: any) => m.message.content)
+    .find((c: any) => c.type === "tool_result" && c.tool_use_id === "task-call-1");
   expect(toolResult).toBeDefined();
   expect(toolResult.content).toContain("Subagent analysis: everything looks good");
 
   // Check final result
   const result = messages.find((m) => m.type === "result" && m.subtype === "success") as any;
   expect(result).toBeDefined();
-  expect(result.text).toBe("The subagent said everything looks good!");
+  expect(result.result).toBe("The subagent said everything looks good!");
 });

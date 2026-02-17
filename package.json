@@ -1,6 +1,6 @@
 {
   "name": "fourmis-agents-sdk",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Multi-provider AI agent SDK with direct API access and in-process tool execution",
   "type": "module",
   "main": "dist/index.js",
@@ -58,7 +58,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:tools": "bun test tests/tools/",
-    "test:integration": "bun test tests/integration.test.ts"
+    "test:integration": "bun test tests/integration.test.ts",
+    "test:compat": "bun run tests/compat/run-compat.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

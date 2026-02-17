@@ -14,6 +14,14 @@ import { homedir } from "node:os";
 import type { NormalizedMessage, NormalizedContent } from "../providers/types.ts";
 import { uuid as makeUuid } from "../types.ts";
 
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /**
@@ -162,6 +170,7 @@ export function findLatestSession(cwd: string): string | null {
 export function loadSessionMessages(
   cwd: string,
   sessionId: string,
+  resumeSessionAt?: string,
 ): NormalizedMessage[] {
   const dir = sessionsDir(cwd);
   const filePath = join(dir, `${sessionId}.jsonl`);
@@ -174,8 +183,11 @@ export function loadSessionMessages(
   }
 
   const messages: NormalizedMessage[] = [];
+  let reachedResumePoint = false;
 
   for (const line of lines) {
+    if (resumeSessionAt && reachedResumePoint) break;
+
     try {
       const entry = JSON.parse(line) as Record<string, unknown>;
 
@@ -194,16 +206,57 @@ export function loadSessionMessages(
       if (typeof message.content === "string") {
         content = message.content;
       } else if (Array.isArray(message.content)) {
-        // Filter to only content types we can replay (text, tool_use, tool_result)
-        // Skip thinking blocks, etc.
-        content = (message.content as Record<string, unknown>[])
-          .filter(c => c.type === "text" || c.type === "tool_use" || c.type === "tool_result")
-          .map(c => c as NormalizedContent);
+        // Preserve known blocks. Unknown typed blocks are replayed as text so they are not silently dropped.
+        const normalizedBlocks: NormalizedContent[] = [];
+        for (const c of message.content as unknown[]) {
+          if (!c || typeof c !== "object") continue;
+          const block = c as Record<string, unknown>;
+          if (typeof block.type !== "string") continue;
+
+          if (block.type === "text" && typeof block.text === "string") {
+            normalizedBlocks.push({ type: "text", text: block.text });
+            continue;
+          }
+
+          if (
+            block.type === "tool_use"
+            && typeof block.id === "string"
+            && typeof block.name === "string"
+          ) {
+            normalizedBlocks.push({
+              type: "tool_use",
+              id: block.id,
+              name: block.name,
+              input: block.input ?? {},
+            });
+            continue;
+          }
+
+          if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
+            normalizedBlocks.push({
+              type: "tool_result",
+              tool_use_id: block.tool_use_id,
+              content: typeof block.content === "string" ? block.content : safeStringify(block.content),
+              is_error: typeof block.is_error === "boolean" ? block.is_error : undefined,
+            });
+            continue;
+          }
+
+          normalizedBlocks.push({
+            type: "text",
+            text: `[session:${block.type}] ${safeStringify(block)}`,
+          });
+        }
+        content = normalizedBlocks;
       } else {
         continue;
       }
 
       messages.push({ role, content } as NormalizedMessage);
+
+      if (resumeSessionAt && entry.uuid === resumeSessionAt) {
+        reachedResumePoint = true;
+      }
     } catch {
       // Skip malformed lines
     }

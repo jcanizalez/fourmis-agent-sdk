@@ -26,6 +26,12 @@ export type McpHttpConfig = {
   headers?: Record<string, string>;
 };
 
+export type McpClaudeAIProxyConfig = {
+  type: "claudeai-proxy";
+  url: string;
+  id: string;
+};
+
 export type McpSdkConfig = {
   type: "sdk";
   name: string;
@@ -34,10 +40,23 @@ export type McpSdkConfig = {
 
 export type McpServerConfig = McpStdioConfig | McpSseConfig | McpHttpConfig | McpSdkConfig;
 
+export type McpServerConfigForProcessTransport =
+  | McpStdioConfig
+  | McpSseConfig
+  | McpHttpConfig
+  | Omit<McpSdkConfig, "instance">;
+
+export type McpServerStatusConfig = McpServerConfigForProcessTransport | McpClaudeAIProxyConfig;
+
 export type McpToolInfo = {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  annotations?: {
+    readOnly?: boolean;
+    destructive?: boolean;
+    openWorld?: boolean;
+  };
 };
 
 export type McpResourceInfo = {
@@ -49,7 +68,10 @@ export type McpResourceInfo = {
 
 export type McpServerStatus = {
   name: string;
-  status: "connected" | "failed" | "pending" | "disabled";
+  status: "connected" | "failed" | "needs-auth" | "pending" | "disabled";
+  serverInfo?: { name: string; version: string };
+  config?: McpServerStatusConfig;
+  scope?: string;
   tools?: McpToolInfo[];
   error?: string;
 };

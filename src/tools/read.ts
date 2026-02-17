@@ -27,15 +27,21 @@ export const ReadTool: ToolImplementation = {
         type: "number",
         description: "Number of lines to read",
       },
+      pages: {
+        type: "array",
+        items: { type: "number" },
+        description: "Optional PDF page numbers (1-based).",
+      },
     },
     required: ["file_path"],
   },
 
   async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
-    const { file_path, offset, limit } = input as {
+    const { file_path, offset, limit, pages } = input as {
       file_path: string;
       offset?: number;
       limit?: number;
+      pages?: number[];
     };
 
     if (!file_path) {
@@ -50,6 +56,13 @@ export const ReadTool: ToolImplementation = {
 
       if (!exists) {
         return { content: `Error: File not found: ${resolvedPath}`, isError: true };
+      }
+
+      if (Array.isArray(pages) && pages.length > 0 && resolvedPath.toLowerCase().endsWith(".pdf")) {
+        return {
+          content: "Error: PDF page extraction is not implemented in this runtime.",
+          isError: true,
+        };
       }
 
       const text = await file.text();

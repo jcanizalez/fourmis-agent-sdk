@@ -14,6 +14,7 @@ import { agentLoop } from "../agent-loop.ts";
 import type { AgentMessage } from "../types.ts";
 import { uuid } from "../types.ts";
 import { getProvider } from "../providers/registry.ts";
+import { loadSessionMessages } from "../utils/session-store.ts";
 
 export type AgentContext = {
   agents: Record<string, AgentDefinition>;
@@ -46,6 +47,15 @@ export function createTaskTool(ctx: AgentContext): ToolImplementation {
           type: "string",
           description: "The type of agent to use. Must match a registered agent definition.",
         },
+        model: {
+          type: "string",
+          enum: ["sonnet", "opus", "haiku"],
+          description: "Optional model family hint for this subagent.",
+        },
+        resume: {
+          type: "string",
+          description: "Optional session ID to resume this subagent from.",
+        },
         run_in_background: {
           type: "boolean",
           description: "If true, run the task in the background and return a task ID.",
@@ -54,21 +64,45 @@ export function createTaskTool(ctx: AgentContext): ToolImplementation {
           type: "number",
           description: "Maximum number of turns for the subagent.",
         },
+        name: {
+          type: "string",
+          description: "Optional display name for the spawned subagent.",
+        },
+        team_name: {
+          type: "string",
+          description: "Optional team name context for this subagent.",
+        },
+        mode: {
+          type: "string",
+          enum: ["acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"],
+          description: "Permission mode hint for the spawned subagent.",
+        },
       },
-      required: ["prompt", "subagent_type"],
+      required: ["description", "prompt", "subagent_type"],
     },
     async execute(input: unknown, toolCtx) {
       const {
+        description,
         prompt,
         subagent_type,
+        model: requestedModel,
+        resume,
         run_in_background,
         max_turns,
+        name,
+        team_name,
+        mode,
       } = input as {
-        description?: string;
+        description: string;
         prompt: string;
         subagent_type: string;
+        model?: "sonnet" | "opus" | "haiku";
+        resume?: string;
         run_in_background?: boolean;
         max_turns?: number;
+        name?: string;
+        team_name?: string;
+        mode?: "acceptEdits" | "bypassPermissions" | "default" | "delegate" | "dontAsk" | "plan";
       };
 
       const agentDef = ctx.agents[subagent_type];
@@ -95,19 +129,23 @@ export function createTaskTool(ctx: AgentContext): ToolImplementation {
         ? getProvider(agentDef.provider)
         : ctx.parentProvider;
 
-      // Resolve model (agent can override)
-      const model = agentDef.model ?? ctx.parentModel;
+      // Resolve model (task input override > agent override > parent)
+      const modelAliases: Record<"sonnet" | "opus" | "haiku", string> = {
+        sonnet: "claude-sonnet-4-5-20250929",
+        opus: "claude-opus-4-5-20251101",
+        haiku: "claude-haiku-4-5-20251001",
+      };
+      const model = requestedModel
+        ? modelAliases[requestedModel]
+        : (agentDef.model ?? ctx.parentModel);
 
       // Build subagent's tool registry
-      let subTools: ToolRegistry;
-      if (agentDef.tools) {
-        subTools = buildToolRegistry(agentDef.tools);
-      } else {
-        subTools = buildToolRegistry(resolveToolNames("coding"));
-      }
+      const baseTools = agentDef.tools ?? resolveToolNames({ type: "preset", preset: "claude_code" });
+      const subTools: ToolRegistry = buildToolRegistry(baseTools, undefined, agentDef.disallowedTools);
 
       const maxTurns = max_turns ?? agentDef.maxTurns ?? 10;
-      const sessionId = uuid();
+      const sessionId = resume ?? uuid();
+      const previousMessages = resume ? loadSessionMessages(ctx.parentCwd, resume) : undefined;
       const abortController = new AbortController();
 
       // Link parent signal
@@ -116,7 +154,27 @@ export function createTaskTool(ctx: AgentContext): ToolImplementation {
       }
 
       // Build system prompt from agent definition
-      const systemPrompt = `${agentDef.prompt}\n\nYou are a subagent of type "${subagent_type}". ${agentDef.description}`;
+      const systemPromptParts = [
+        agentDef.prompt,
+        `You are a subagent of type "${subagent_type}". ${agentDef.description}`,
+        `Task summary: ${description}`,
+      ];
+      if (agentDef.criticalSystemReminder_EXPERIMENTAL) {
+        systemPromptParts.push(`Critical reminder: ${agentDef.criticalSystemReminder_EXPERIMENTAL}`);
+      }
+      if (agentDef.skills && agentDef.skills.length > 0) {
+        systemPromptParts.push(`Available skills:\n${agentDef.skills.map((s) => `- ${s}`).join("\n")}`);
+      }
+      if (name) {
+        systemPromptParts.push(`Subagent name: ${name}`);
+      }
+      if (team_name) {
+        systemPromptParts.push(`Team context: ${team_name}`);
+      }
+      if (mode) {
+        systemPromptParts.push(`Permission mode hint: ${mode}`);
+      }
+      const systemPrompt = systemPromptParts.join("\n\n");
 
       const runAgent = async (): Promise<string> => {
         const messages: AgentMessage[] = [];
@@ -125,6 +183,7 @@ export function createTaskTool(ctx: AgentContext): ToolImplementation {
         for await (const msg of agentLoop(prompt, {
           provider,
           model,
+          modelState: { current: model },
           systemPrompt,
           tools: subTools,
           permissions: ctx.parentPermissions,
@@ -132,18 +191,23 @@ export function createTaskTool(ctx: AgentContext): ToolImplementation {
           sessionId,
           maxTurns,
           maxBudgetUsd: 5,
-          includeStreamEvents: false,
+          includePartialMessages: false,
           signal: abortController.signal,
           env: ctx.parentEnv,
           debug: ctx.parentDebug,
           hooks: ctx.parentHooks,
+          previousMessages,
         })) {
           messages.push(msg);
-          if (msg.type === "text") {
-            resultText += msg.text;
+          if (msg.type === "assistant") {
+            for (const block of msg.message.content) {
+              if (block.type === "text") {
+                resultText += block.text;
+              }
+            }
           }
           if (msg.type === "result" && msg.subtype === "success") {
-            resultText = msg.text ?? resultText;
+            resultText = msg.result || resultText;
           }
         }
 
