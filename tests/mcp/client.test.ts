@@ -74,7 +74,7 @@ test("getTools() returns namespaced ToolImplementation", async () => {
 
   const tools = manager.getTools();
   expect(tools).toHaveLength(1);
-  expect(tools[0].name).toBe("mcp__myserver__greet");
+  expect(tools[0].name).toBe("myserver__greet");
   expect(tools[0].description).toBe("Greets a person");
 
   // Execute the wrapped tool
@@ -132,8 +132,8 @@ test("multiple servers connect independently", async () => {
   const tools = manager.getTools();
   expect(tools).toHaveLength(2);
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "mcp__math-add__add",
-    "mcp__math-mul__multiply",
+    "math-add__add",
+    "math-mul__multiply",
   ]);
 
   const addResult = await manager.callTool("math-add", "add", { a: 3, b: 4 });

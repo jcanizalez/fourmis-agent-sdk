@@ -140,7 +140,7 @@ export class McpClientManager {
   }
 
   /**
-   * Get all MCP tools wrapped as ToolImplementation, namespaced as mcp__server__tool.
+   * Get all MCP tools wrapped as ToolImplementation, namespaced as server__tool.
    */
   getTools(): ToolImplementation[] {
     const result: ToolImplementation[] = [];
@@ -149,7 +149,7 @@ export class McpClientManager {
       if (server.status.status !== "connected") continue;
 
       for (const tool of server.tools) {
-        const namespacedName = `mcp__${serverName}__${tool.name}`;
+        const namespacedName = `${serverName}__${tool.name}`;
         result.push({
           name: namespacedName,
           description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,

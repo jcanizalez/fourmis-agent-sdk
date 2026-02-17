@@ -66,7 +66,7 @@ test("agent loop with MCP server: tool call flows end-to-end", async () => {
   // Mock provider calls the MCP tool
   const provider = createMockProvider([
     {
-      toolCalls: [{ id: "c1", name: "mcp__calc__add", input: { a: 5, b: 3 } }],
+      toolCalls: [{ id: "c1", name: "calc__add", input: { a: 5, b: 3 } }],
     },
     { text: "The result is 8" },
   ]);
@@ -94,7 +94,7 @@ test("agent loop with MCP server: tool call flows end-to-end", async () => {
 
   // Init should show the MCP tools
   const init = messages.find((m) => m.type === "system" && m.subtype === "init") as any;
-  expect(init.tools).toContain("mcp__calc__add");
+  expect(init.tools).toContain("calc__add");
   // Resource tools should also be registered
   expect(init.tools).toContain("mcp__list_resources");
   expect(init.tools).toContain("mcp__read_resource");
