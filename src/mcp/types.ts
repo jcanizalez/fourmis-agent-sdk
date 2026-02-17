@@ -24,6 +24,8 @@ export type McpHttpConfig = {
   type: "http";
   url: string;
   headers?: Record<string, string>;
+  /** Custom prefix for tool names. If empty string, no prefix is added. Defaults to server name. */
+  toolPrefix?: string;
 };
 
 export type McpClaudeAIProxyConfig = {

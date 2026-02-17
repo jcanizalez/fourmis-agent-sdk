@@ -149,7 +149,9 @@ export class McpClientManager {
       if (server.status.status !== "connected") continue;
 
       for (const tool of server.tools) {
-        const namespacedName = serverName === "_" ? tool.name : `${serverName}__${tool.name}`;
+        const config = this.configs[serverName];
+        const prefix = "toolPrefix" in config ? config.toolPrefix : serverName;
+        const namespacedName = prefix === "" ? tool.name : `${prefix}__${tool.name}`;
         result.push({
           name: namespacedName,
           description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
