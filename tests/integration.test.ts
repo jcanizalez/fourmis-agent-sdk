@@ -11,11 +11,11 @@ const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
 
 test.skipIf(!hasApiKey)("end-to-end: read file and report", async () => {
   const conversation = query({
-    prompt: "Read the file /root/dev/fourmis-agent-sdk/package.json and tell me the project name. Be brief — just say the name.",
+    prompt: "Read the file /root/dev/fourmis-project/fourmis-agent-sdk/package.json and tell me the project name. Be brief — just say the name.",
     options: {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
-      cwd: "/root/dev/fourmis-agent-sdk",
+      cwd: "/root/dev/fourmis-project/fourmis-agent-sdk",
       tools: { type: "preset", preset: "claude_code" },
       maxTurns: 5,
       maxBudgetUsd: 0.10,

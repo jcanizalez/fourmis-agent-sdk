@@ -1,10 +1,10 @@
-import { test, expect } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import {
   calculateOpenAICost,
   findOpenAIPricing,
   OPENAI_CONTEXT_WINDOWS,
 } from "../../src/utils/cost.ts";
-import { OpenAIAdapter } from "../../src/providers/openai.ts";
+import { OpenAIAdapter, sanitizeToolName } from "../../src/providers/openai.ts";
 
 // ─── Cost calculation ────────────────────────────────────────────────────────
 
@@ -284,4 +284,95 @@ test("responses: full multi-turn conversation", () => {
       content: [{ type: "output_text", text: "The file contains: hello world" }],
     },
   ]);
+});
+
+// ─── Tool name sanitization (OpenAI 64-char limit) ──────────────────────────
+
+describe("sanitizeToolName", () => {
+  test("passes through valid short names unchanged", () => {
+    expect(sanitizeToolName("Read")).toBe("Read");
+    expect(sanitizeToolName("nodeA__echo")).toBe("nodeA__echo");
+    expect(sanitizeToolName("my-tool_v2")).toBe("my-tool_v2");
+  });
+
+  test("replaces invalid characters with underscores", () => {
+    expect(sanitizeToolName("nodeA.echo")).toBe("nodeA_echo");
+    expect(sanitizeToolName("server:tool/action")).toBe("server_tool_action");
+    expect(sanitizeToolName("tool with spaces")).toBe("tool_with_spaces");
+  });
+
+  test("truncates names exceeding 64 characters with hash suffix", () => {
+    const longName = "production-server-01__playwright-browser__take_full_page_screenshot_of_element";
+    const result = sanitizeToolName(longName);
+    expect(result.length).toBe(64);
+    // Should end with _<6-char-hash>
+    expect(result).toMatch(/_[a-f0-9]{6}$/);
+    // First 57 chars of the original name are preserved before the hash
+    expect(result.startsWith("production-server-01__playwright-browser__take_full_page_")).toBe(true);
+  });
+
+  test("hash is deterministic", () => {
+    const longName = "a".repeat(100);
+    expect(sanitizeToolName(longName)).toBe(sanitizeToolName(longName));
+  });
+
+  test("different long names produce different hashes", () => {
+    const name1 = "device-alpha__upstream-one__" + "a".repeat(50);
+    const name2 = "device-alpha__upstream-one__" + "b".repeat(50);
+    expect(sanitizeToolName(name1)).not.toBe(sanitizeToolName(name2));
+  });
+
+  test("exactly 64 chars passes through unchanged", () => {
+    const name = "a".repeat(64);
+    expect(sanitizeToolName(name)).toBe(name);
+    expect(sanitizeToolName(name).length).toBe(64);
+  });
+});
+
+describe("OpenAI adapter tool name sanitization in messages", () => {
+  test("sanitizes tool names with dots in assistant messages", () => {
+    const result = adapter.convertMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tc_1", name: "nodeA.echo", input: { msg: "hi" } },
+        ],
+      },
+    ]);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "tc_1",
+            type: "function",
+            function: {
+              name: "nodeA_echo",
+              arguments: '{"msg":"hi"}',
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("sanitizes tool names in responses API messages", () => {
+    const result = adapter.convertMessagesForResponses([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tc_1", name: "server.tool", input: {} },
+        ],
+      },
+    ]);
+    expect(result).toEqual([
+      {
+        type: "function_call",
+        call_id: "tc_1",
+        name: "server_tool",
+        arguments: "{}",
+      },
+    ]);
+  });
 });

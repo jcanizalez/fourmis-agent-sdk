@@ -48,12 +48,36 @@ const CODEX_MODELS = new Set([
 type OAIMessage = OpenAI.ChatCompletionMessageParam;
 type OAITool = OpenAI.ChatCompletionTool;
 
+// OpenAI enforces: ^[a-zA-Z0-9_-]{1,64}$
+const OPENAI_MAX_TOOL_NAME = 64;
+
+/** Replace invalid chars and truncate to 64 chars (with hash suffix if needed). */
+export function sanitizeToolName(name: string): string {
+  const clean = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (clean.length <= OPENAI_MAX_TOOL_NAME) return clean;
+  // Deterministic 6-char hash suffix from full name
+  const hash = simpleHash(name);
+  return clean.slice(0, OPENAI_MAX_TOOL_NAME - 7) + "_" + hash;
+}
+
+/** Simple deterministic hash → 6 hex chars. */
+function simpleHash(s: string): string {
+  let h = 0x811c9dc5; // FNV-1a offset basis
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193); // FNV prime
+  }
+  return (h >>> 0).toString(16).padStart(8, "0").slice(0, 6);
+}
+
 export class OpenAIAdapter implements ProviderAdapter {
   name = "openai";
   private client: OpenAI;
   private codexMode: boolean;
   private accountId?: string;
   private currentAccessToken?: string;
+  /** Maps sanitized OpenAI tool name → original name. Rebuilt each query cycle. */
+  private toolNameMap = new Map<string, string>();
 
   constructor(options?: { apiKey?: string; baseUrl?: string }) {
     const key = options?.apiKey ?? process.env.OPENAI_API_KEY;
@@ -92,6 +116,17 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   async *chat(request: ChatRequest): AsyncGenerator<ChatChunk> {
+    // Build sanitized→original name map for this query cycle
+    this.toolNameMap.clear();
+    if (request.tools) {
+      for (const tool of request.tools) {
+        const sanitized = sanitizeToolName(tool.name);
+        if (sanitized !== tool.name) {
+          this.toolNameMap.set(sanitized, tool.name);
+        }
+      }
+    }
+
     if (this.codexMode) {
       yield* this.chatResponses(request);
     } else {
@@ -204,7 +239,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       }
     }
 
-    // Emit buffered tool calls after stream ends
+    // Emit buffered tool calls after stream ends (reverse-map sanitized names)
     for (const [, buf] of toolCallBuffers) {
       let input: unknown;
       try {
@@ -215,7 +250,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       yield {
         type: "tool_call",
         id: buf.id,
-        name: buf.name,
+        name: this.resolveToolName(buf.name),
         input,
       };
     }
@@ -274,7 +309,7 @@ export class OpenAIAdapter implements ProviderAdapter {
             yield {
               type: "tool_call",
               id: item.call_id,
-              name: item.name,
+              name: this.resolveToolName(item.name),
               input: parsedInput,
             };
           }
@@ -355,7 +390,7 @@ export class OpenAIAdapter implements ProviderAdapter {
               id: block.id,
               type: "function",
               function: {
-                name: block.name,
+                name: sanitizeToolName(block.name),
                 arguments: JSON.stringify(block.input),
               },
             });
@@ -438,7 +473,7 @@ export class OpenAIAdapter implements ProviderAdapter {
           result.push({
             type: "function_call",
             call_id: tu.id,
-            name: tu.name,
+            name: sanitizeToolName(tu.name),
             arguments: JSON.stringify(tu.input),
           });
         }
@@ -479,7 +514,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return tools.map((tool) => ({
       type: "function" as const,
       function: {
-        name: tool.name,
+        name: sanitizeToolName(tool.name),
         description: tool.description,
         parameters: tool.inputSchema,
       },
@@ -489,11 +524,16 @@ export class OpenAIAdapter implements ProviderAdapter {
   private convertToolsForResponses(tools: ToolDefinition[]): any[] {
     return tools.map((tool) => ({
       type: "function",
-      name: tool.name,
+      name: sanitizeToolName(tool.name),
       description: tool.description,
       parameters: tool.inputSchema,
       strict: false,
     }));
+  }
+
+  /** Resolve a tool name from OpenAI back to the original (pre-sanitization) name. */
+  private resolveToolName(name: string): string {
+    return this.toolNameMap.get(name) ?? name;
   }
 
   // ─── Stop reason mapping ──────────────────────────────────────────────────
