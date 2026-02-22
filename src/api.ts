@@ -2,7 +2,7 @@
  * Public query() function — the main entry point.
  */
 
-import type { QueryOptions, Query, PermissionsConfig } from "./types.ts";
+import type { QueryOptions, Query, PermissionsConfig, SdkPluginConfig } from "./types.ts";
 import { uuid } from "./types.ts";
 import { getProvider } from "./providers/registry.ts";
 import { resolveToolNames, buildToolRegistry } from "./tools/index.ts";
@@ -20,8 +20,9 @@ import { findLatestSession, loadSessionMessages, createSessionLogger } from "./u
 import type { NormalizedMessage } from "./providers/types.ts";
 import { createNativeMemoryTool, createMemoryTool } from "./memory/index.ts";
 import type { NativeMemoryTool } from "./memory/index.ts";
-import { loadSkills } from "./skills/index.ts";
+import { loadSkills, loadSkillsFromDir } from "./skills/index.ts";
 import type { Skill } from "./skills/index.ts";
+import { loadPluginComponents } from "./plugins.ts";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TURNS = 10;
@@ -126,6 +127,34 @@ export function query(params: {
         console.warn(`[skills] ${d.type}: ${d.message} (${d.path})`);
       }
     }
+  }
+
+  // Plugins — load skills and MCP servers from plugin directories
+  const pluginComponents = loadPluginComponents(options.plugins, options.debug);
+  if (pluginComponents.skills.length > 0) {
+    // Merge plugin skills (avoid name collisions — plugin skills take lower priority)
+    const existingNames = new Set(skills.map(s => s.name));
+    for (const skill of pluginComponents.skills) {
+      if (!existingNames.has(skill.name)) {
+        skills.push(skill);
+        existingNames.add(skill.name);
+      } else if (options.debug) {
+        console.warn(`[plugins] skill "${skill.name}" already loaded, skipping plugin version`);
+      }
+    }
+  }
+  if (options.debug && pluginComponents.skillDiagnostics.length > 0) {
+    for (const d of pluginComponents.skillDiagnostics) {
+      console.warn(`[plugins/skills] ${d.type}: ${d.message} (${d.path})`);
+    }
+  }
+
+  // Merge plugin MCP servers into options.mcpServers
+  if (Object.keys(pluginComponents.mcpServers).length > 0) {
+    options.mcpServers = {
+      ...(options.mcpServers ?? {}),
+      ...pluginComponents.mcpServers,
+    };
   }
 
   // Build system prompt
